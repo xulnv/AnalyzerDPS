@@ -1,7 +1,7 @@
 local ADDON_NAME, Analyzer = ...
 
 Analyzer = Analyzer or {}
-Analyzer.VERSION = "0.76"
+Analyzer.VERSION = "0.77"
 Analyzer.fight = nil
 Analyzer.lastReport = nil
 Analyzer.player = {}
