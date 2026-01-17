@@ -1,4 +1,4 @@
-## Interface: 50400
+## Interface: 50503
 ## Title: xAnalyzerDPS
 ## Notes: Fight analyzer for MoP Classic
 ## Author: xCzarownik2137

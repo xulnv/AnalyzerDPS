@@ -366,6 +366,48 @@ Analyzer.utils.IsSpellReady = IsSpellReady
 Analyzer.utils.PlayerHasAuraBySpellId = PlayerHasAuraBySpellId
 Analyzer.utils.CountTableKeys = CountTableKeys
 
+local PREPULL_POTION_SPELLS = {
+  [105702] = true,
+}
+
+function Analyzer:IsPrecombatBuffSpell(spellId)
+  if not spellId then
+    return false
+  end
+  local module = self.activeModule
+  if module and module.IsPrecombatBuffSpell then
+    return module.IsPrecombatBuffSpell(spellId) == true
+  end
+  if PREPULL_POTION_SPELLS[spellId] then
+    return true
+  end
+  local name = GetSpellInfo(spellId)
+  if not name then
+    return false
+  end
+  local lower = SafeLower(name)
+  return string.find(lower, "potion", 1, true) ~= nil
+    or string.find(lower, "mikstura", 1, true) ~= nil
+end
+
+function Analyzer:GetPlayerHistoryKey()
+  local guid = UnitGUID("player") or (self.player and self.player.guid)
+  if guid and guid ~= "" then
+    return guid
+  end
+  local name, realm = UnitFullName and UnitFullName("player") or nil
+  if not name then
+    name = UnitName("player")
+  end
+  if not realm or realm == "" then
+    realm = GetRealmName and GetRealmName() or ""
+  end
+  if name and name ~= "" then
+    return name .. "-" .. (realm or "")
+  end
+  return "Unknown"
+end
+
 function Analyzer:AddEventLog(timestamp, label, spellId, prepull)
   local fight = self.fight
   if not fight then
@@ -1300,8 +1342,10 @@ function Analyzer:StoreFightHistory(report, fight)
     return
   end
   AnalyzerDPSDB = AnalyzerDPSDB or {}
-  AnalyzerDPSDB.fightHistory = AnalyzerDPSDB.fightHistory or {}
-  local history = AnalyzerDPSDB.fightHistory
+  AnalyzerDPSDB.fightHistoryByChar = AnalyzerDPSDB.fightHistoryByChar or {}
+  local playerKey = self:GetPlayerHistoryKey()
+  AnalyzerDPSDB.fightHistoryByChar[playerKey] = AnalyzerDPSDB.fightHistoryByChar[playerKey] or {}
+  local history = AnalyzerDPSDB.fightHistoryByChar[playerKey]
   local entry = {
     time = date("%m-%d %H:%M"),
     name = fight.primaryTargetName or "Boss",
@@ -1311,6 +1355,9 @@ function Analyzer:StoreFightHistory(report, fight)
     kill = fight.kill == true,
     isBoss = report.context.isBoss == true,
     isDummy = report.context.isDummy == true,
+    playerKey = playerKey,
+    playerName = UnitName("player"),
+    playerGuid = UnitGUID("player"),
   }
   table.insert(history, 1, entry)
   while #history > 10 do
@@ -1323,7 +1370,11 @@ function Analyzer:RenderHistory()
   if not ui or not ui.historyText or not ui.historyContent then
     return
   end
-  local history = AnalyzerDPSDB and AnalyzerDPSDB.fightHistory or {}
+  local playerKey = self:GetPlayerHistoryKey()
+  local history = AnalyzerDPSDB
+    and AnalyzerDPSDB.fightHistoryByChar
+    and AnalyzerDPSDB.fightHistoryByChar[playerKey]
+    or {}
   if #history == 0 then
     ui.historyText:SetText(self:L("NO_HISTORY"))
     ui.historyContent:SetHeight(ui.historyText:GetStringHeight() + 6)
@@ -2352,7 +2403,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if not Analyzer.fight then
       if isAuraEvent
         and isPlayerDest
-        and IsTrackedBuffSpell(spellId) then
+        and (auraType == "BUFF" or not auraType)
+        and Analyzer:IsPrecombatBuffSpell(spellId) then
         local spellName = GetSpellInfo(spellId)
         local label = "Prepot: " .. (spellName or "Unknown")
         Analyzer:RecordPrecombatEvent(timestamp, label, spellId)
