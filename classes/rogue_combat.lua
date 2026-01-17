@@ -330,7 +330,7 @@ function module.TrackDebuff(analyzer, subevent, spellId, destGUID, destName, tim
   end
 end
 
-function module.Analyze(_, fight, context)
+function module.Analyze(analyzer, fight, context)
   local metrics = {}
   local issues = {}
   local score = 100
@@ -499,6 +499,163 @@ function module.Analyze(_, fight, context)
     metrics = metrics,
     issues = issues,
   }
+end
+
+function module.GetLiveScore(analyzer, fight)
+  if not fight then
+    return nil
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  if duration < 5 then
+    return nil
+  end
+
+  local score = 100
+
+  -- Simple score based on active buffs/debuffs
+  local hasRevealingStrike = false
+  for guid, debuff in pairs(fight.debuffs or {}) do
+    if debuff[SPELL_REVEALING_STRIKE] and debuff[SPELL_REVEALING_STRIKE].active then
+      hasRevealingStrike = true
+      break
+    end
+  end
+
+  if not hasRevealingStrike then
+    score = score - 20
+  end
+
+  local hasSliceAndDice = false
+  if fight.buffs and fight.buffs[SPELL_SLICE_AND_DICE] and fight.buffs[SPELL_SLICE_AND_DICE].active then
+    hasSliceAndDice = true
+  end
+
+  if not hasSliceAndDice then
+    score = score - 20
+  end
+
+  if score < 0 then
+    score = 0
+  end
+
+  return score
+end
+
+local function CheckPlayerBuff(spellId)
+  if not spellId then return false end
+  for i = 1, 40 do
+    local name, _, _, _, _, _, _, _, _, auraSpellId = UnitBuff("player", i)
+    if not name then break end
+    if auraSpellId == spellId then
+      return true
+    end
+  end
+  return false
+end
+
+local function CheckTargetDebuff(spellId)
+  if not spellId or not UnitExists("target") then return false end
+  for i = 1, 40 do
+    local name, _, _, _, _, _, _, caster, _, _, auraSpellId = UnitDebuff("target", i)
+    if not name then break end
+    if auraSpellId == spellId and caster == "player" then
+      return true
+    end
+  end
+  return false
+end
+
+function module.GetLiveAdvice(analyzer, fight)
+  if not fight then
+    return ""
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  local hasDeepInsight = CheckPlayerBuff(SPELL_DEEP_INSIGHT)
+  if hasDeepInsight then
+    return "Deep Insight! Burst teraz!"
+  end
+
+  local hasSliceAndDice = CheckPlayerBuff(SPELL_SLICE_AND_DICE)
+  if not hasSliceAndDice and duration > 3 then
+    return "Odswiez Slice and Dice!"
+  end
+
+  if UnitExists("target") then
+    local hasRevealingStrike = CheckTargetDebuff(SPELL_REVEALING_STRIKE)
+    if not hasRevealingStrike and duration > 2 then
+      return "Naloz Revealing Strike!"
+    end
+
+    local hasRupture = CheckTargetDebuff(SPELL_RUPTURE)
+    if not hasRupture and duration > 10 then
+      return "Naloz Rupture!"
+    end
+  end
+
+  if utils.IsSpellReady(SPELL_ADRENALINE_RUSH) and duration > 15 then
+    return "Adrenaline Rush gotowe!"
+  end
+
+  if utils.IsSpellReady(SPELL_KILLING_SPREE) and duration > 15 then
+    return "Killing Spree gotowe!"
+  end
+
+  if utils.IsSpellReady(SPELL_SHADOW_BLADES) and duration > 10 then
+    return "Shadow Blades gotowe!"
+  end
+
+  return ""
+end
+
+function module.GetAdviceSpellIcon(analyzer, fight)
+  if not fight then
+    return nil
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  local hasDeepInsight = CheckPlayerBuff(SPELL_DEEP_INSIGHT)
+  if hasDeepInsight then
+    return SPELL_SINISTER_STRIKE
+  end
+
+  local hasSliceAndDice = CheckPlayerBuff(SPELL_SLICE_AND_DICE)
+  if not hasSliceAndDice and duration > 3 then
+    return SPELL_SLICE_AND_DICE
+  end
+
+  if UnitExists("target") then
+    local hasRevealingStrike = CheckTargetDebuff(SPELL_REVEALING_STRIKE)
+    if not hasRevealingStrike and duration > 2 then
+      return SPELL_REVEALING_STRIKE
+    end
+
+    local hasRupture = CheckTargetDebuff(SPELL_RUPTURE)
+    if not hasRupture and duration > 10 then
+      return SPELL_RUPTURE
+    end
+  end
+
+  if utils.IsSpellReady(SPELL_ADRENALINE_RUSH) and duration > 15 then
+    return SPELL_ADRENALINE_RUSH
+  end
+
+  if utils.IsSpellReady(SPELL_KILLING_SPREE) and duration > 15 then
+    return SPELL_KILLING_SPREE
+  end
+
+  if utils.IsSpellReady(SPELL_SHADOW_BLADES) and duration > 10 then
+    return SPELL_SHADOW_BLADES
+  end
+
+  return nil
 end
 
 Analyzer:RegisterClassModule(module.class, module)

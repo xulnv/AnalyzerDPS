@@ -339,7 +339,7 @@ function module.TrackDebuff(analyzer, subevent, spellId, destGUID, destName, tim
   end
 end
 
-function module.Analyze(_, fight, context)
+function module.Analyze(analyzer, fight, context)
   local metrics = {}
   local issues = {}
   local score = 100
@@ -533,6 +533,122 @@ function module.Analyze(_, fight, context)
     metrics = metrics,
     issues = issues,
   }
+end
+
+function module.GetLiveScore(analyzer, fight)
+  if not fight then
+    return nil
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  if duration < 5 then
+    return nil
+  end
+
+  local score = 100
+
+  -- Check for wasted Lava Surge procs
+  if fight.procs and fight.procs.lavaSurgeWasted and fight.procs.lavaSurgeWasted > 3 then
+    score = score - 20
+  end
+
+  if score < 0 then
+    score = 0
+  end
+
+  return score
+end
+
+local function CheckPlayerBuff(spellId)
+  if not spellId then return false end
+  for i = 1, 40 do
+    local name, _, _, _, _, _, _, _, _, auraSpellId = UnitBuff("player", i)
+    if not name then break end
+    if auraSpellId == spellId then
+      return true
+    end
+  end
+  return false
+end
+
+local function CheckTargetDebuff(spellId)
+  if not spellId or not UnitExists("target") then return false end
+  for i = 1, 40 do
+    local name, _, _, _, _, _, _, caster, _, _, auraSpellId = UnitDebuff("target", i)
+    if not name then break end
+    if auraSpellId == spellId and caster == "player" then
+      return true
+    end
+  end
+  return false
+end
+
+function module.GetLiveAdvice(analyzer, fight)
+  if not fight then
+    return ""
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  local hasLavaSurge = CheckPlayerBuff(SPELL_LAVA_SURGE)
+  if hasLavaSurge then
+    return "Lava Surge! Uzyj Lava Burst!"
+  end
+
+  local hasFlameShock = CheckTargetDebuff(SPELL_FLAME_SHOCK)
+  if not hasFlameShock and UnitExists("target") and duration > 3 then
+    return "Brak Flame Shock na celu!"
+  end
+
+  if utils.IsSpellReady(SPELL_ASCENDANCE) and duration > 15 then
+    return "Ascendance gotowe!"
+  end
+
+  if utils.IsSpellReady(SPELL_FIRE_ELEMENTAL_TOTEM) and duration > 10 then
+    return "Fire Elemental gotowy!"
+  end
+
+  if utils.IsSpellReady(SPELL_ELEMENTAL_BLAST) and duration > 5 then
+    return "Elemental Blast gotowy!"
+  end
+
+  return ""
+end
+
+function module.GetAdviceSpellIcon(analyzer, fight)
+  if not fight then
+    return nil
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  local hasLavaSurge = CheckPlayerBuff(SPELL_LAVA_SURGE)
+  if hasLavaSurge then
+    return SPELL_LAVA_BURST
+  end
+
+  local hasFlameShock = CheckTargetDebuff(SPELL_FLAME_SHOCK)
+  if not hasFlameShock and UnitExists("target") and duration > 3 then
+    return SPELL_FLAME_SHOCK
+  end
+
+  if utils.IsSpellReady(SPELL_ASCENDANCE) and duration > 15 then
+    return SPELL_ASCENDANCE
+  end
+
+  if utils.IsSpellReady(SPELL_FIRE_ELEMENTAL_TOTEM) and duration > 10 then
+    return SPELL_FIRE_ELEMENTAL_TOTEM
+  end
+
+  if utils.IsSpellReady(SPELL_ELEMENTAL_BLAST) and duration > 5 then
+    return SPELL_ELEMENTAL_BLAST
+  end
+
+  return nil
 end
 
 Analyzer:RegisterClassModule(module.class, module)

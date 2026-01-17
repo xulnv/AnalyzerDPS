@@ -1,7 +1,7 @@
 local ADDON_NAME, Analyzer = ...
 
 Analyzer = Analyzer or {}
-Analyzer.VERSION = "0.70"
+Analyzer.VERSION = "0.76"
 Analyzer.fight = nil
 Analyzer.lastReport = nil
 Analyzer.player = {}
@@ -9,7 +9,7 @@ Analyzer.ui = Analyzer.ui or {}
 Analyzer.announced = false
 Analyzer.announceAttempts = 0
 Analyzer.precombatEvents = {}
-Analyzer.precombatPotionLast = 0
+Analyzer.precombatEventLast = {}
 Analyzer.classModules = Analyzer.classModules or {}
 Analyzer.activeModule = Analyzer.activeModule or nil
 Analyzer.utils = Analyzer.utils or {}
@@ -43,6 +43,20 @@ local DEFAULT_SETTINGS = {
   hintUnlocked = false,
   soundChannel = "Master",
   language = "enUS",
+  miniWindow = {
+    enabled = true,
+    position = {
+      point = "CENTER",
+      relativePoint = "CENTER",
+      x = -300,
+      y = 0,
+    },
+  },
+  minimapIcon = {
+    enabled = true,
+    position = 220,
+  },
+  onboardingCompleted = false,
 }
 
 Analyzer.locales = Analyzer.locales or {}
@@ -80,6 +94,25 @@ local function NormalizeSpecName(specName)
   return specName
 end
 
+local function ExtractSpecLabelFromModule(module)
+  if not module then
+    return nil
+  end
+  if type(module.specLabel) == "string" and module.specLabel ~= "" then
+    return module.specLabel
+  end
+  if type(module.name) == "string" then
+    local _, spec = string.match(module.name, "^(.-)%s*%-%s*(.+)$")
+    if spec and spec ~= "" then
+      return spec
+    end
+  end
+  if type(module.specKey) == "string" and module.specKey ~= "" then
+    return module.specKey:sub(1, 1):upper() .. module.specKey:sub(2)
+  end
+  return nil
+end
+
 local function RoundToTenth(value)
   return math.floor((value or 0) * 10 + 0.5) / 10
 end
@@ -92,6 +125,18 @@ local function NormalizeSpecKey(specName)
   key = key:gsub("%s+", "")
   key = key:gsub("[%-_]", "")
   return key
+end
+
+function Analyzer:GetSpecLabel(player)
+  local specLabel = NormalizeSpecName((player and player.specName) or (self.player and self.player.specName))
+  if specLabel ~= "Unknown" then
+    return specLabel
+  end
+  local moduleLabel = ExtractSpecLabelFromModule(self.activeModule)
+  if moduleLabel and moduleLabel ~= "" then
+    return moduleLabel
+  end
+  return "Unknown"
 end
 
 local function FormatTimeLabel(delta)
@@ -427,13 +472,15 @@ function Analyzer:AddEventLog(timestamp, label, spellId, prepull)
   end
 end
 
-function Analyzer:RecordPrecombatEvent(timestamp, label, spellId)
+function Analyzer:RecordPrecombatEvent(timestamp, label, spellId, throttleKey)
   local now = NormalizeTimestamp(timestamp)
-  local last = self.precombatPotionLast or 0
+  self.precombatEventLast = self.precombatEventLast or {}
+  local key = throttleKey or "potion"
+  local last = self.precombatEventLast[key] or 0
   if (now - last) < 0.5 then
     return
   end
-  self.precombatPotionLast = now
+  self.precombatEventLast[key] = now
   table.insert(self.precombatEvents, {
     time = now,
     label = label or "",
@@ -483,18 +530,31 @@ function Analyzer:GetDetailsDps()
     return nil
   end
 
-  local damageContainer = combat[1]
-  if not damageContainer then
-    return nil
+  local damageContainer = nil
+  if combat.GetContainer then
+    damageContainer = combat:GetContainer(DETAILS_ATTRIBUTE_DAMAGE or 1)
   end
-  local actors = damageContainer._ActorTable or damageContainer
-  if not actors then
+  if not damageContainer then
+    damageContainer = combat[1]
+  end
+  if not damageContainer then
     return nil
   end
 
   local playerGUID = UnitGUID("player")
   local playerName = UnitName("player")
   local actor = nil
+  if damageContainer.GetActor then
+    actor = damageContainer:GetActor(playerName)
+    if not actor and playerGUID then
+      actor = damageContainer:GetActor(playerGUID)
+    end
+  end
+
+  local actors = damageContainer._ActorTable or damageContainer
+  if not actors then
+    return nil
+  end
   for _, entry in pairs(actors) do
     if type(entry) == "table" then
       if entry.serial == playerGUID or entry.guid == playerGUID then
@@ -508,6 +568,13 @@ function Analyzer:GetDetailsDps()
   end
   if not actor then
     return nil
+  end
+
+  if actor.dps and actor.dps > 0 then
+    return actor.dps
+  end
+  if actor.last_dps and actor.last_dps > 0 then
+    return actor.last_dps
   end
 
   local total = actor.total or actor.total_without_pet or actor.total_damage or actor.damage
@@ -537,12 +604,15 @@ function Analyzer:GetDpsForReport(fight, duration)
 end
 
 function Analyzer:AnnounceLoaded()
-  if self.announced then
-    return
-  end
   local player = self.player or {}
   local classLabel = player.className or player.class or "Unknown"
-  local specLabel = NormalizeSpecName(player.specName)
+  local specLabel = self:GetSpecLabel(player)
+  if specLabel == "Unknown" then
+    return
+  end
+  if self.announced and self.announcedSpec == specLabel and self.announcedClass == classLabel then
+    return
+  end
   local message = string.format(
     self:L("LOADED"),
     Analyzer.VERSION or "0.0",
@@ -556,24 +626,32 @@ function Analyzer:AnnounceLoaded()
     print(coloredMessage)
   end
   self.announced = true
+  self.announcedSpec = specLabel
+  self.announcedClass = classLabel
 end
 
 function Analyzer:QueueAnnounce()
   if self.announced then
+    self:InitPlayer()
+    local specLabel = self:GetSpecLabel(self.player)
+    if specLabel ~= "Unknown" and self.announcedSpec == "Unknown" then
+      self:AnnounceLoaded()
+    end
     return
   end
   self.announceAttempts = (self.announceAttempts or 0) + 1
   self:InitPlayer()
-  if NormalizeSpecName(self.player.specName) ~= "Unknown" or self.announceAttempts >= 10 then
+  if self:GetSpecLabel(self.player) ~= "Unknown" then
     self:AnnounceLoaded()
+    return
+  end
+  if self.announceAttempts >= 30 then
     return
   end
   if C_Timer and C_Timer.After then
     C_Timer.After(1, function()
       Analyzer:QueueAnnounce()
     end)
-  else
-    self:AnnounceLoaded()
   end
 end
 
@@ -689,6 +767,28 @@ function Analyzer:InitSettings()
   CopyDefaults(AnalyzerDPSDB.settings, DEFAULT_SETTINGS)
   self:ApplyModuleDefaults()
   self.settings = AnalyzerDPSDB.settings
+  self:LoadLastReport()
+end
+
+function Analyzer:LoadLastReport()
+  local playerKey = self:GetPlayerHistoryKey()
+  if not AnalyzerDPSDB or not AnalyzerDPSDB.lastReportByChar then
+    return
+  end
+  local saved = AnalyzerDPSDB.lastReportByChar[playerKey]
+  if type(saved) == "table" then
+    self.lastReport = saved
+  end
+end
+
+function Analyzer:SaveLastReport(report)
+  if type(report) ~= "table" then
+    return
+  end
+  AnalyzerDPSDB = AnalyzerDPSDB or {}
+  AnalyzerDPSDB.lastReportByChar = AnalyzerDPSDB.lastReportByChar or {}
+  local playerKey = self:GetPlayerHistoryKey()
+  AnalyzerDPSDB.lastReportByChar[playerKey] = report
 end
 
 function Analyzer:ApplyModuleDefaults()
@@ -899,6 +999,16 @@ function Analyzer:RefreshSettingsUI()
   end
   self:UpdateLanguageFlag(settings.language)
 
+  if frame.miniWindowCheck then
+    local miniWindowSettings = settings.miniWindow or DEFAULT_SETTINGS.miniWindow
+    frame.miniWindowCheck:SetChecked(miniWindowSettings.enabled == true)
+  end
+
+  if frame.minimapIconCheck then
+    local minimapIconSettings = settings.minimapIcon or DEFAULT_SETTINGS.minimapIcon
+    frame.minimapIconCheck:SetChecked(minimapIconSettings.enabled ~= false)
+  end
+
   frame.isRefreshing = false
 end
 
@@ -1010,12 +1120,73 @@ function Analyzer:SetLanguage(lang)
   end
   self.settings.language = lang
   local langName = lang == "plPL" and "Polski" or "English"
-  print(string.format(self:L("LANGUAGE_CHANGED"), langName))
 
   if self.ui and self.ui.frame and self.ui.frame.languageDropdown then
     UIDropDownMenu_SetText(self.ui.frame.languageDropdown, langName)
   end
   self:UpdateLanguageFlag(lang)
+
+  if self.ui and self.ui.frame then
+    local frame = self.ui.frame
+
+    -- Update main tabs
+    if frame.tabs then
+      if frame.tabs[1] then
+        frame.tabs[1]:SetText(self:L("TAB_REPORT") or "Report")
+      end
+      if frame.tabs[2] then
+        frame.tabs[2]:SetText(self:L("TAB_SETTINGS") or "Settings")
+      end
+      if frame.tabs[3] then
+        frame.tabs[3]:SetText(self:L("TAB_INFO") or "Info")
+      end
+    end
+
+    -- Update report tabs
+    for i, tab in ipairs(frame.reportTabs or {}) do
+      if i == 1 then
+        tab:SetText(self:L("REPORT_SUMMARY"))
+      elseif i == 2 then
+        tab:SetText(self:L("REPORT_LOG"))
+      elseif i == 3 then
+        tab:SetText(self:L("REPORT_HISTORY"))
+      end
+    end
+
+    -- Update settings UI labels
+    if frame.settingsContent then
+      if frame.miniWindowCheck and frame.miniWindowCheck.label then
+        frame.miniWindowCheck.label:SetText(self:L("ENABLE_MINI_WINDOW"))
+      end
+      if frame.minimapIconCheck and frame.minimapIconCheck.label then
+        frame.minimapIconCheck.label:SetText(self:L("ENABLE_MINIMAP_ICON"))
+      end
+      if frame.hintUnlockCheck and frame.hintUnlockCheck.label then
+        frame.hintUnlockCheck.label:SetText(self:L("UNLOCK_HINT"))
+      end
+      if frame.hintPreviewCheck and frame.hintPreviewCheck.label then
+        frame.hintPreviewCheck.label:SetText(self:L("PREVIEW_HINT"))
+      end
+      if frame.resetButton then
+        frame.resetButton:SetText(self:L("RESET_POSITION"))
+      end
+    end
+
+    -- Update mini live window labels
+    if self.ui.miniWindow then
+      local miniWindow = self.ui.miniWindow
+      if miniWindow.scoreLabel then
+        miniWindow.scoreLabel:SetText(self:L("SCORE"))
+      end
+    end
+
+    -- Re-render current report if any
+    if self.lastReport then
+      self:RenderReport(self.lastReport)
+    end
+  end
+
+  print(string.format(self:L("LANGUAGE_CHANGED"), langName))
 end
 
 local function SetFlagTextures(flag, key, shown)
@@ -1103,16 +1274,26 @@ function Analyzer:EndFight()
   if not self.fight then
     return
   end
-  local fightDuration = GetTime() - self.fight.startTime
-  self.fight.endTime = GetTime()
+  local fight = self.fight
+  local startTime = fight.startTime or GetTime()
+  local endTime = GetTime()
+  local fightDuration = endTime - startTime
+  
+  fight.endTime = endTime
   self:FinalizeFight()
-  self:BuildReport()
+  
+  local reportBuilt = pcall(function()
+    self:BuildReport()
+  end)
+  
   self.fight = nil
-
-  if fightDuration >= 5 then
-    if self.ui and self.ui.frame and self.lastReport then
-      self.ui.frame:Show()
-    end
+  
+  if fightDuration >= 5 and reportBuilt then
+    C_Timer.After(0.1, function()
+      if self.ui and self.ui.frame and self.lastReport then
+        self:OpenMainFrame()
+      end
+    end)
   end
 end
 
@@ -1256,6 +1437,9 @@ function Analyzer:BuildReport()
   report.duration = duration
   report.startTime = fight.startTime
 
+  self:ApplyActivityPenalty(report, fight, context)
+  self:ApplyPrepullPenalty(report, fight, context)
+
   local dps, dpsSource = self:GetDpsForReport(fight, duration)
   report.dps = dps
   report.dpsSource = dpsSource
@@ -1263,7 +1447,74 @@ function Analyzer:BuildReport()
   self:StoreFightHistory(report, fight)
 
   self.lastReport = report
+  self:SaveLastReport(report)
   self:RenderReport(report)
+end
+
+function Analyzer:ApplyActivityPenalty(report, fight, context)
+  if not report or not fight or not context then
+    return
+  end
+  if context.duration < 15 then
+    return
+  end
+
+  local totalCasts = 0
+  for _, count in pairs(fight.spells or {}) do
+    totalCasts = totalCasts + (count or 0)
+  end
+  report.totalCasts = totalCasts
+
+  local penalty = 0
+  if totalCasts == 0 then
+    penalty = 80
+    utils.AddIssue(report.issues, Analyzer:L("LOW_ACTIVITY_NONE"))
+  else
+    local minExpected = math.max(3, math.floor(context.duration / 3))
+    if totalCasts < minExpected then
+      local ratio = (minExpected - totalCasts) / minExpected
+      penalty = math.max(15, math.floor(ratio * 35))
+      utils.AddIssue(report.issues, string.format(Analyzer:L("LOW_ACTIVITY_LOW"), totalCasts, context.duration))
+    end
+  end
+
+  if penalty > 0 then
+    report.score = utils.Clamp((report.score or 0) - penalty, 0, 100)
+  end
+end
+
+function Analyzer:ApplyPrepullPenalty(report, fight, context)
+  if not report or not fight or not context then
+    return
+  end
+  if not context.isBoss then
+    return
+  end
+  if context.duration < 20 then
+    return
+  end
+
+  local hasPrepot = false
+  local hasPrecast = false
+  for _, event in ipairs(fight.eventLog or {}) do
+    if event.prepull then
+      if (event.spellId and PREPULL_POTION_SPELLS[event.spellId])
+        or (event.label and string.find(event.label, "Prepot:", 1, true)) then
+        hasPrepot = true
+      else
+        hasPrecast = true
+      end
+    end
+  end
+
+  if not hasPrepot then
+    utils.AddIssue(report.issues, Analyzer:L("PREPULL_PREPOT_MISSING"))
+    report.score = utils.Clamp((report.score or 0) - 6, 0, 100)
+  end
+  if not hasPrecast then
+    utils.AddIssue(report.issues, Analyzer:L("PREPULL_PRECAST_MISSING"))
+    report.score = utils.Clamp((report.score or 0) - 4, 0, 100)
+  end
 end
 
 function Analyzer:UpdateMetricRow(row, metric)
@@ -1346,8 +1597,10 @@ function Analyzer:StoreFightHistory(report, fight)
   local playerKey = self:GetPlayerHistoryKey()
   AnalyzerDPSDB.fightHistoryByChar[playerKey] = AnalyzerDPSDB.fightHistoryByChar[playerKey] or {}
   local history = AnalyzerDPSDB.fightHistoryByChar[playerKey]
+  
   local entry = {
-    time = date("%m-%d %H:%M"),
+    time = date("%Y-%m-%d %H:%M:%S"),
+    timestamp = time(),
     name = fight.primaryTargetName or "Boss",
     duration = report.duration or 0,
     score = report.score or 0,
@@ -1358,42 +1611,160 @@ function Analyzer:StoreFightHistory(report, fight)
     playerKey = playerKey,
     playerName = UnitName("player"),
     playerGuid = UnitGUID("player"),
+    
+    fullReport = {
+      score = report.score,
+      metrics = report.metrics,
+      issues = report.issues,
+      context = report.context,
+      player = report.player,
+      duration = report.duration,
+      dps = report.dps,
+      dpsSource = report.dpsSource,
+      startTime = report.startTime,
+      timeline = report.timeline,
+      eventLog = report.eventLog,
+    },
   }
+  
   table.insert(history, 1, entry)
-  while #history > 10 do
+  while #history > 20 do
     table.remove(history)
   end
 end
 
 function Analyzer:RenderHistory()
   local ui = self.ui
-  if not ui or not ui.historyText or not ui.historyContent then
+  if not ui or not ui.historyContent then
     return
   end
+  
+  if not ui.clearAllHistoryButton then
+    local btn = CreateFrame("Button", nil, ui.historyContent)
+    btn:SetSize(140, 24)
+    btn:SetPoint("TOPRIGHT", ui.historyContent, "TOPRIGHT", -10, -10)
+    self:ApplyUISkin(btn, { alpha = 0.8 })
+    
+    btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    btn.text:SetPoint("CENTER")
+    btn.text:SetText(self:L("CLEAR_ALL_HISTORY"))
+    btn.text:SetTextColor(1.00, 0.30, 0.30)
+    
+    btn:SetScript("OnClick", function()
+      StaticPopup_Show("ANALYZER_CLEAR_ALL_HISTORY")
+    end)
+    btn:SetScript("OnEnter", function(self)
+      self:SetAlpha(0.6)
+    end)
+    btn:SetScript("OnLeave", function(self)
+      self:SetAlpha(1.0)
+    end)
+    
+    ui.clearAllHistoryButton = btn
+  end
+  
+  if ui.historyButtons then
+    for _, btn in ipairs(ui.historyButtons) do
+      btn:Hide()
+    end
+  else
+    ui.historyButtons = {}
+  end
+  
   local playerKey = self:GetPlayerHistoryKey()
   local history = AnalyzerDPSDB
     and AnalyzerDPSDB.fightHistoryByChar
     and AnalyzerDPSDB.fightHistoryByChar[playerKey]
     or {}
+    
   if #history == 0 then
-    ui.historyText:SetText(self:L("NO_HISTORY"))
-    ui.historyContent:SetHeight(ui.historyText:GetStringHeight() + 6)
+    if not ui.historyEmptyText then
+      ui.historyEmptyText = ui.historyContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      ui.historyEmptyText:SetPoint("TOPLEFT", ui.historyContent, "TOPLEFT", 10, -50)
+      ui.historyEmptyText:SetTextColor(0.7, 0.7, 0.7)
+    end
+    ui.historyEmptyText:SetText(self:L("NO_HISTORY"))
+    ui.historyEmptyText:Show()
+    ui.clearAllHistoryButton:Hide()
     return
   end
-  local lines = {}
+  
+  if ui.historyEmptyText then
+    ui.historyEmptyText:Hide()
+  end
+  ui.clearAllHistoryButton:Show()
+  
+  local yOffset = -45
   for i, entry in ipairs(history) do
+    local btn = ui.historyButtons[i]
+    if not btn then
+      btn = CreateFrame("Button", nil, ui.historyContent)
+      btn:SetSize(680, 32)
+      self:ApplyUISkin(btn, { alpha = 0.3 })
+      
+      btn.nameText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+      btn.nameText:SetPoint("TOPLEFT", btn, "TOPLEFT", 8, -4)
+      btn.nameText:SetTextColor(1.00, 0.85, 0.10)
+      
+      btn.infoText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      btn.infoText:SetPoint("TOPLEFT", btn.nameText, "BOTTOMLEFT", 0, -2)
+      btn.infoText:SetTextColor(0.8, 0.8, 0.8)
+      
+      btn.scoreText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+      btn.scoreText:SetPoint("TOPRIGHT", btn, "TOPRIGHT", -8, -8)
+      
+      btn:SetScript("OnEnter", function(self)
+        self:SetAlpha(0.8)
+      end)
+      btn:SetScript("OnLeave", function(self)
+        self:SetAlpha(1.0)
+      end)
+      
+      table.insert(ui.historyButtons, btn)
+    end
+    
+    btn:SetPoint("TOPLEFT", ui.historyContent, "TOPLEFT", 10, yOffset)
+    
     local name = entry.name or "Boss"
     local duration = entry.duration or 0
     local status = entry.isDummy and self:L("DUMMY") or (entry.kill and self:L("KILL") or self:L("ATTEMPT"))
-    local dpsText = entry.dps and entry.dps > 0 and string.format("DPS %.0f", entry.dps) or "DPS n/a"
-    local scoreText = string.format("%s %d", self:L("SCORE"), entry.score or 0)
-    table.insert(
-      lines,
-      string.format("%d) %s | %s | %.1fs | %s | %s | %s", i, entry.time or "--", name, duration, status, dpsText, scoreText)
-    )
+    local dpsText = entry.dps and entry.dps > 0 and string.format("%.0f DPS", entry.dps) or "DPS n/a"
+    local timeText = entry.time or "--"
+    
+    btn.nameText:SetText(string.format("%s - %s", name, status))
+    btn.infoText:SetText(string.format("%s | %.1fs | %s", timeText, duration, dpsText))
+    
+    local score = entry.score or 0
+    btn.scoreText:SetText(tostring(score))
+    if score >= 90 then
+      btn.scoreText:SetTextColor(0.20, 0.90, 0.20)
+    elseif score >= 70 then
+      btn.scoreText:SetTextColor(1.00, 0.82, 0.00)
+    else
+      btn.scoreText:SetTextColor(1.00, 0.30, 0.30)
+    end
+    
+    btn:SetScript("OnClick", function()
+      if entry.fullReport then
+        Analyzer:LoadHistoryReport(entry.fullReport)
+      end
+    end)
+    
+    btn:Show()
+    yOffset = yOffset - 36
   end
-  ui.historyText:SetText(table.concat(lines, "\n"))
-  ui.historyContent:SetHeight(ui.historyText:GetStringHeight() + 6)
+end
+
+function Analyzer:LoadHistoryReport(reportData)
+  if not reportData then
+    return
+  end
+  
+  self.lastReport = reportData
+  self:RenderReport(reportData)
+  self:SwitchReportTab(1)
+  
+  print("|cFFE3BA04AnalyzerDPS:|r Zaladowano raport z historii")
 end
 
 function Analyzer:RenderReport(report)
@@ -1412,7 +1783,7 @@ function Analyzer:RenderReport(report)
     string.format(
       "%s: %s | %s: %s | %s: %s | %s: %s",
       self:L("CLASS"), report.player.class,
-      self:L("SPEC"), report.player.specName or "Unknown",
+      self:L("SPEC"), self:GetSpecLabel(report.player),
       self:L("RACE"), report.player.race,
       self:L("MODE"), mode
     )
@@ -1433,6 +1804,8 @@ function Analyzer:RenderReport(report)
   elseif report.score < 80 then
     scoreColor = COLORS.warn
   end
+  ui.summary:SetTextColor(scoreColor[1], scoreColor[2], scoreColor[3])
+  ui.subsummary:SetTextColor(scoreColor[1], scoreColor[2], scoreColor[3])
   ui.score:SetText(string.format("Ocena: %d / 100", report.score))
   ui.score:SetTextColor(scoreColor[1], scoreColor[2], scoreColor[3])
 
@@ -1499,6 +1872,96 @@ function Analyzer:RenderReport(report)
   if not ui.frame:IsShown() then
     ui.frame:Show()
   end
+end
+
+function Analyzer:OpenMainFrame()
+  if not self.ui or not self.ui.frame then
+    return
+  end
+  self:SwitchTab(1)
+  self:SwitchReportTab(1)
+  if self.lastReport then
+    self:RenderReport(self.lastReport)
+  else
+    self.ui.frame:Show()
+  end
+end
+
+function Analyzer:ClearAllHistory()
+  local playerKey = self:GetPlayerHistoryKey()
+  if AnalyzerDPSDB and AnalyzerDPSDB.fightHistoryByChar then
+    AnalyzerDPSDB.fightHistoryByChar[playerKey] = {}
+  end
+  
+  self:RenderHistory()
+  print("|cFFE3BA04AnalyzerDPS:|r " .. self:L("ALL_HISTORY_CLEARED"))
+end
+
+function Analyzer:ClearCurrentReport()
+  self.lastReport = nil
+  self.fight = nil
+  self.precombatEvents = {}
+  self.precombatEventLast = {}
+  
+  local playerKey = self:GetPlayerHistoryKey()
+  if AnalyzerDPSDB and AnalyzerDPSDB.lastReportByChar then
+    AnalyzerDPSDB.lastReportByChar[playerKey] = nil
+  end
+  
+  if self.ui then
+    if self.ui.summary then
+      self.ui.summary:SetText(self:L("NO_REPORT"))
+      self.ui.summary:SetTextColor(0.8, 0.8, 0.8)
+    end
+    if self.ui.subsummary then
+      self.ui.subsummary:SetText("")
+    end
+    if self.ui.score then
+      self.ui.score:SetText(self:L("SCORE") .. ": -- / 100")
+      self.ui.score:SetTextColor(0.8, 0.8, 0.8)
+    end
+    if self.ui.dps then
+      self.ui.dps:SetText("DPS: --")
+    end
+    if self.ui.duration then
+      self.ui.duration:SetText(self:L("FIGHT_DURATION") .. ": --")
+    end
+    if self.ui.metricRows then
+      for _, row in ipairs(self.ui.metricRows) do
+        row:Hide()
+      end
+    end
+    if self.ui.issuesText then
+      self.ui.issuesText:SetText(self:L("REPORT_CLEARED"))
+    end
+    if self.ui.logText then
+      self.ui.logText:SetText(self:L("NO_LOG"))
+    end
+    if self.ui.timeline then
+      for i = 1, MAX_TIMELINE_MARKS do
+        if self.ui.timeline.marks[i] then
+          self.ui.timeline.marks[i]:Hide()
+        end
+      end
+    end
+    if self.ui.timelineScale then
+      self.ui.timelineScale:SetText("")
+    end
+  end
+  
+  print("|cFFE3BA04AnalyzerDPS:|r " .. self:L("REPORT_CLEARED"))
+end
+
+function Analyzer:ToggleSettings()
+  if not self.ui or not self.ui.frame then
+    return
+  end
+  if self.ui.frame:IsShown() and self.ui.frame.activeTab == 2 then
+    self.ui.frame:Hide()
+    return
+  end
+  self.ui.frame:Show()
+  self:SwitchTab(2)
 end
 
 local function ApplyUIButtonSkin(button)
@@ -1616,14 +2079,31 @@ SetTabSelected = function(button, selected)
   if not button then
     return
   end
+
+  if selected then
+    button:LockHighlight()
+  else
+    button:UnlockHighlight()
+  end
+
   local skin = button.tabSkin
-  if skin and skin.normal then
-    if selected then
-      skin.normal:SetVertexColor(0.12, 0.12, 0.12, 0.98)
-    else
-      skin.normal:SetVertexColor(0.20, 0.20, 0.20, 0.80)
+  if skin then
+    if skin.normal then
+      if selected then
+        skin.normal:SetVertexColor(0.12, 0.12, 0.12, 0.98)
+      else
+        skin.normal:SetVertexColor(0.20, 0.20, 0.20, 0.80)
+      end
+    end
+    if skin.highlight then
+      if selected then
+        skin.highlight:SetVertexColor(0.12, 0.12, 0.12, 0.98)
+      else
+        skin.highlight:SetVertexColor(0.35, 0.35, 0.35, 0.95)
+      end
     end
   end
+
   local text = button:GetFontString()
   if text then
     if selected then
@@ -1899,6 +2379,40 @@ local function CreateReportFrame()
   frame.duration = reportOverviewContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   frame.duration:SetPoint("TOPLEFT", frame.dps, "BOTTOMLEFT", 0, -2)
   frame.duration:SetText("Czas walki: 0.0s")
+
+  frame.clearReportButton = CreateFrame("Button", nil, reportOverviewContent, "GameMenuButtonTemplate")
+  frame.clearReportButton:SetSize(140, 22)
+  frame.clearReportButton:SetPoint("TOPRIGHT", reportOverviewContent, "TOPRIGHT", -16, -96)
+  frame.clearReportButton:SetText(Analyzer:L("CLEAR_REPORT"))
+  frame.clearReportButton:SetScript("OnClick", function()
+    StaticPopup_Show("ANALYZERDPS_CLEAR_REPORT")
+  end)
+
+  StaticPopupDialogs["ANALYZERDPS_CLEAR_REPORT"] = {
+    text = Analyzer:L("CLEAR_REPORT_CONFIRM"),
+    button1 = Analyzer:L("YES"),
+    button2 = Analyzer:L("NO"),
+    OnAccept = function()
+      Analyzer:ClearCurrentReport()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+  }
+
+  StaticPopupDialogs["ANALYZER_CLEAR_ALL_HISTORY"] = {
+    text = Analyzer:L("CLEAR_ALL_HISTORY_CONFIRM"),
+    button1 = Analyzer:L("YES"),
+    button2 = Analyzer:L("NO"),
+    OnAccept = function()
+      Analyzer:ClearAllHistory()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+  }
 
   local metricsFrame = CreateFrame("Frame", nil, reportOverviewContent)
   metricsFrame:SetSize(350, 220)
@@ -2255,6 +2769,44 @@ local function CreateReportFrame()
     Analyzer:RefreshSettingsUI()
   end)
 
+  -- Mini Live Window Settings
+  local miniWindowTitle = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  miniWindowTitle:SetPoint("TOPLEFT", 16, -490)
+  miniWindowTitle:SetText(Analyzer:L("MINI_WINDOW_TITLE"))
+  miniWindowTitle:SetTextColor(1.00, 0.85, 0.10)
+
+  frame.miniWindowCheck = CreateFrame("CheckButton", nil, settingsContent, "ChatConfigCheckButtonTemplate")
+  frame.miniWindowCheck:SetPoint("TOPLEFT", 16, -515)
+  SetCheckLabel(frame.miniWindowCheck, Analyzer:L("ENABLE_MINI_WINDOW"))
+  frame.miniWindowCheck:SetScript("OnClick", function(self)
+    local settings = Analyzer.settings
+    if not settings then
+      return
+    end
+    settings.miniWindow = settings.miniWindow or {}
+    settings.miniWindow.enabled = self:GetChecked() == true
+    Analyzer:UpdateMiniLiveWindow()
+  end)
+
+  -- Minimap Icon Settings
+  local minimapTitle = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  minimapTitle:SetPoint("TOPLEFT", 16, -560)
+  minimapTitle:SetText(Analyzer:L("MINIMAP_ICON_TITLE"))
+  minimapTitle:SetTextColor(1.00, 0.85, 0.10)
+
+  frame.minimapIconCheck = CreateFrame("CheckButton", nil, settingsContent, "ChatConfigCheckButtonTemplate")
+  frame.minimapIconCheck:SetPoint("TOPLEFT", 16, -585)
+  SetCheckLabel(frame.minimapIconCheck, Analyzer:L("ENABLE_MINIMAP_ICON"))
+  frame.minimapIconCheck:SetScript("OnClick", function(self)
+    local settings = Analyzer.settings
+    if not settings then
+      return
+    end
+    settings.minimapIcon = settings.minimapIcon or {}
+    settings.minimapIcon.enabled = self:GetChecked() == true
+    Analyzer:UpdateMinimapIconVisibility()
+  end)
+
   local infoContent = CreateFrame("Frame", nil, frame)
   infoContent:SetAllPoints()
   infoContent:Hide()
@@ -2267,7 +2819,7 @@ local function CreateReportFrame()
 
   local versionText = infoContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   versionText:SetPoint("TOP", infoTitle, "BOTTOM", 0, -10)
-  versionText:SetText("Version 0.70")
+  versionText:SetText("Version 0.73")
 
   local authorLabel = infoContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   authorLabel:SetPoint("TOP", versionText, "BOTTOM", 0, -30)
@@ -2346,7 +2898,620 @@ local function CreateReportFrame()
     SetTabSelected(tab, i == 1)
   end
 
+  Analyzer:SwitchTab(1)
+
   return frame
+end
+
+local function CreateMiniLiveWindow()
+  local miniWindow = CreateFrame("Frame", "AnalyzerDPSMiniWindow", UIParent)
+  miniWindow:SetSize(320, 140)
+  miniWindow:SetPoint("CENTER", UIParent, "CENTER", -300, 0)
+  miniWindow:SetMovable(true)
+  miniWindow:EnableMouse(true)
+  miniWindow:RegisterForDrag("LeftButton")
+  miniWindow:SetClampedToScreen(true)
+  miniWindow:Hide()
+
+  Analyzer:ApplyUISkin(miniWindow, { alpha = 0.95 })
+
+  -- DPS Text
+  miniWindow.dpsLabel = miniWindow:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  miniWindow.dpsLabel:SetPoint("TOP", miniWindow, "TOP", 0, -8)
+  miniWindow.dpsLabel:SetText("DPS")
+  miniWindow.dpsLabel:SetTextColor(0.75, 0.75, 0.75)
+
+  miniWindow.dpsValue = miniWindow:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+  miniWindow.dpsValue:SetPoint("TOP", miniWindow.dpsLabel, "BOTTOM", 0, -2)
+  miniWindow.dpsValue:SetText("0")
+  miniWindow.dpsValue:SetTextColor(1.00, 0.85, 0.10)
+
+  -- Score Text
+  miniWindow.scoreLabel = miniWindow:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  miniWindow.scoreLabel:SetPoint("TOP", miniWindow.dpsValue, "BOTTOM", 0, -6)
+  miniWindow.scoreLabel:SetText(Analyzer:L("SCORE"))
+  miniWindow.scoreLabel:SetTextColor(0.75, 0.75, 0.75)
+
+  miniWindow.scoreValue = miniWindow:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  miniWindow.scoreValue:SetPoint("LEFT", miniWindow.scoreLabel, "RIGHT", 4, 0)
+  miniWindow.scoreValue:SetText("--")
+  miniWindow.scoreValue:SetTextColor(0.75, 0.75, 0.75)
+
+  -- Advice Container Frame
+  miniWindow.adviceContainer = CreateFrame("Frame", nil, miniWindow)
+  miniWindow.adviceContainer:SetSize(300, 48)
+  miniWindow.adviceContainer:SetPoint("TOP", miniWindow.scoreLabel, "BOTTOM", 0, -10)
+  Analyzer:ApplyUISkin(miniWindow.adviceContainer, { alpha = 0.5 })
+
+  -- Advice Icon (larger, on the left)
+  miniWindow.adviceIcon = miniWindow.adviceContainer:CreateTexture(nil, "ARTWORK")
+  miniWindow.adviceIcon:SetSize(40, 40)
+  miniWindow.adviceIcon:SetPoint("LEFT", miniWindow.adviceContainer, "LEFT", 4, 0)
+  miniWindow.adviceIcon:Hide()
+
+  -- Advice Text (larger, to the right of icon)
+  miniWindow.adviceText = miniWindow.adviceContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  miniWindow.adviceText:SetPoint("LEFT", miniWindow.adviceIcon, "RIGHT", 8, 0)
+  miniWindow.adviceText:SetPoint("RIGHT", miniWindow.adviceContainer, "RIGHT", -8, 0)
+  miniWindow.adviceText:SetHeight(40)
+  miniWindow.adviceText:SetJustifyH("LEFT")
+  miniWindow.adviceText:SetJustifyV("MIDDLE")
+  miniWindow.adviceText:SetWordWrap(true)
+  miniWindow.adviceText:SetText("")
+  miniWindow.adviceText:SetTextColor(1.00, 1.00, 1.00)
+  miniWindow.adviceText:SetShadowOffset(1, -1)
+  miniWindow.adviceText:SetShadowColor(0, 0, 0, 1)
+  miniWindow.adviceText:SetFont(miniWindow.adviceText:GetFont(), 14, "OUTLINE")
+
+  -- Drag functionality
+  miniWindow:SetScript("OnDragStart", function(self)
+    self:StartMoving()
+  end)
+  miniWindow:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    local point, _, relativePoint, x, y = self:GetPoint()
+    if Analyzer.settings and Analyzer.settings.miniWindow then
+      Analyzer.settings.miniWindow.position = {
+        point = point,
+        relativePoint = relativePoint,
+        x = x,
+        y = y,
+      }
+    end
+  end)
+
+  Analyzer.ui.miniWindow = miniWindow
+
+  return miniWindow
+end
+
+function Analyzer:GetLiveScoreFallback(fight)
+  if not fight then
+    return nil
+  end
+  local duration = GetTime() - fight.startTime
+  if duration < 5 then
+    return nil
+  end
+  local totalCasts = 0
+  for _, count in pairs(fight.spells or {}) do
+    totalCasts = totalCasts + (count or 0)
+  end
+  local minExpected = math.max(3, math.floor(duration / 3))
+  local score = 100
+  if totalCasts == 0 then
+    score = 20
+  elseif totalCasts < minExpected then
+    local ratio = totalCasts / minExpected
+    score = math.floor(40 + ratio * 60)
+  end
+  return Clamp(score, 0, 100)
+end
+
+function Analyzer:UpdateMiniLiveWindow()
+  if not self.ui.miniWindow then
+    return
+  end
+
+  local miniWindow = self.ui.miniWindow
+
+  if not self.fight then
+    miniWindow:Hide()
+    return
+  end
+
+  if not self.settings.miniWindow.enabled then
+    miniWindow:Hide()
+    return
+  end
+
+  miniWindow:Show()
+
+  local now = GetTime()
+  local duration = now - self.fight.startTime
+  local dps = 0
+  if duration > 0 then
+    local detailsDps = self:GetDetailsDps()
+    if detailsDps and detailsDps > 0 then
+      dps = math.floor(detailsDps)
+    elseif self.fight.damage and self.fight.damage > 0 then
+      dps = math.floor(self.fight.damage / duration)
+    end
+  end
+
+  miniWindow.dpsValue:SetText(tostring(dps))
+
+  -- Get current score from active module
+  local score = nil
+  local advice = ""
+
+  if self.activeModule and self.activeModule.GetLiveScore then
+    score = self.activeModule.GetLiveScore(self, self.fight)
+  end
+  if score == nil then
+    score = self:GetLiveScoreFallback(self.fight)
+  end
+
+  if self.activeModule and self.activeModule.GetLiveAdvice then
+    advice = self.activeModule.GetLiveAdvice(self, self.fight)
+  end
+
+  if score then
+    miniWindow.scoreValue:SetText(tostring(math.floor(score)))
+
+    if score >= 90 then
+      miniWindow.scoreValue:SetTextColor(0.20, 0.90, 0.20)
+    elseif score >= 70 then
+      miniWindow.scoreValue:SetTextColor(1.00, 0.82, 0.00)
+    else
+      miniWindow.scoreValue:SetTextColor(1.00, 0.30, 0.30)
+    end
+  else
+    miniWindow.scoreValue:SetText("--")
+    miniWindow.scoreValue:SetTextColor(0.75, 0.75, 0.75)
+  end
+
+  if advice and advice ~= "" then
+    miniWindow.adviceContainer:Show()
+    miniWindow.adviceText:SetText(advice)
+    
+    local iconShown = false
+    if self.activeModule and self.activeModule.GetAdviceSpellIcon then
+      local spellId = self.activeModule.GetAdviceSpellIcon(self, self.fight)
+      if spellId then
+        local spellTexture = GetSpellTexture(spellId)
+        if spellTexture then
+          miniWindow.adviceIcon:SetTexture(spellTexture)
+          miniWindow.adviceIcon:Show()
+          iconShown = true
+        end
+      end
+    end
+    
+    if not iconShown then
+      miniWindow.adviceIcon:Hide()
+      miniWindow.adviceText:SetPoint("LEFT", miniWindow.adviceContainer, "LEFT", 8, 0)
+    else
+      miniWindow.adviceText:SetPoint("LEFT", miniWindow.adviceIcon, "RIGHT", 8, 0)
+    end
+  else
+    miniWindow.adviceContainer:Hide()
+  end
+end
+
+function Analyzer:ApplyMiniWindowPosition()
+  if not self.settings or not self.settings.miniWindow then
+    return
+  end
+
+  local pos = self.settings.miniWindow.position
+  if not pos or not pos.point then
+    return
+  end
+
+  if self.ui.miniWindow then
+    self.ui.miniWindow:ClearAllPoints()
+    self.ui.miniWindow:SetPoint(pos.point, UIParent, pos.relativePoint or pos.point, pos.x or 0, pos.y or 0)
+  end
+end
+
+local function CreateMinimapIcon()
+  local legacyIcons = {
+    "LibDBIcon10_AnalyzerDPS",
+    "LibDBIcon10_xAnalyzerDPS",
+    "AnalyzerDPS_MinimapButton",
+  }
+  for _, name in ipairs(legacyIcons) do
+    local legacy = _G[name]
+    if legacy then
+      legacy:Hide()
+      legacy:SetParent(UIParent)
+    end
+  end
+
+  local children = { Minimap:GetChildren() }
+  for _, child in ipairs(children) do
+    local name = child and child.GetName and child:GetName() or nil
+    if name and name:find("AnalyzerDPS") and name ~= "AnalyzerDPSMinimapButton" then
+      child:Hide()
+      child:SetParent(UIParent)
+    end
+  end
+
+  local button = _G.AnalyzerDPSMinimapButton
+  if not button then
+    button = CreateFrame("Button", "AnalyzerDPSMinimapButton", Minimap)
+  else
+    button:SetParent(Minimap)
+  end
+  button:SetSize(32, 32)
+  button:SetFrameStrata("MEDIUM")
+  button:SetFrameLevel(8)
+  button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+  button:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+
+  local icon = button.icon
+  if not icon then
+    icon = button:CreateTexture(nil, "BACKGROUND")
+    icon:SetSize(20, 20)
+    icon:SetPoint("CENTER", 0, 1)
+    icon:SetTexture("Interface\\Icons\\Ability_Parry")
+    button.icon = icon
+  end
+
+  local overlay = button.overlay
+  if not overlay then
+    overlay = button:CreateTexture(nil, "OVERLAY")
+    overlay:SetSize(53, 53)
+    overlay:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    overlay:SetPoint("TOPLEFT")
+    button.overlay = overlay
+  end
+
+  button:SetScript("OnClick", function(self, buttonType)
+    if buttonType == "LeftButton" then
+      if Analyzer.ui and Analyzer.ui.frame then
+        if Analyzer.ui.frame:IsShown() then
+          Analyzer.ui.frame:Hide()
+        else
+          Analyzer:OpenMainFrame()
+        end
+      end
+    elseif buttonType == "RightButton" then
+      Analyzer:ToggleSettings()
+    end
+  end)
+
+  button:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+    GameTooltip:SetText("Rotation Analyzer", 1.00, 0.85, 0.10)
+    GameTooltip:AddLine("xAnalyzerDPS v" .. (Analyzer.VERSION or "0.7"), 0.7, 0.7, 0.7)
+    GameTooltip:AddLine(" ", 1, 1, 1)
+    GameTooltip:AddLine("|cFFFFD100" .. Analyzer:L("LEFT_CLICK") .. ":|r " .. Analyzer:L("OPEN_REPORT"), 1, 1, 1)
+    GameTooltip:AddLine("|cFFFFD100" .. Analyzer:L("RIGHT_CLICK") .. ":|r " .. Analyzer:L("OPEN_SETTINGS"), 1, 1, 1)
+    GameTooltip:Show()
+  end)
+
+  button:SetScript("OnLeave", function()
+    GameTooltip:Hide()
+  end)
+
+  button:SetScript("OnDragStart", function(self)
+    self:LockHighlight()
+    self.dragging = true
+  end)
+
+  button:SetScript("OnDragStop", function(self)
+    self:UnlockHighlight()
+    self.dragging = false
+    local position = Analyzer:GetMinimapIconPosition()
+    if Analyzer.settings and Analyzer.settings.minimapIcon then
+      Analyzer.settings.minimapIcon.position = position
+    end
+  end)
+
+  button:RegisterForDrag("LeftButton")
+
+  button:SetScript("OnUpdate", function(self)
+    if self.dragging then
+      local position = Analyzer:GetMinimapIconPosition()
+      Analyzer:UpdateMinimapIconPosition(position)
+    end
+  end)
+
+  Analyzer.ui.minimapButton = button
+  Analyzer:UpdateMinimapIconVisibility()
+
+  return button
+end
+
+function Analyzer:UpdateMinimapIconPosition(position)
+  if not self.ui.minimapButton then
+    return
+  end
+
+  local angle = math.rad(position or 220)
+  local x = math.cos(angle) * 80
+  local y = math.sin(angle) * 80
+
+  self.ui.minimapButton:ClearAllPoints()
+  self.ui.minimapButton:SetPoint("CENTER", Minimap, "CENTER", x, y)
+end
+
+function Analyzer:GetMinimapIconPosition()
+  if not self.ui.minimapButton then
+    return 220
+  end
+
+  local centerX, centerY = Minimap:GetCenter()
+  local buttonX, buttonY = self.ui.minimapButton:GetCenter()
+
+  if not centerX or not buttonX then
+    return 220
+  end
+
+  local angle = math.deg(math.atan2(buttonY - centerY, buttonX - centerX))
+  return angle
+end
+
+function Analyzer:UpdateMinimapIconVisibility()
+  if not self.ui.minimapButton then
+    return
+  end
+
+  local enabled = true
+  if self.settings and self.settings.minimapIcon then
+    enabled = self.settings.minimapIcon.enabled ~= false
+  end
+
+  if enabled then
+    self.ui.minimapButton:Show()
+    local position = (self.settings and self.settings.minimapIcon and self.settings.minimapIcon.position) or 220
+    self:UpdateMinimapIconPosition(position)
+  else
+    self.ui.minimapButton:Hide()
+  end
+end
+
+local function CreateOnboardingFrame()
+  local frame = CreateFrame("Frame", "AnalyzerDPSOnboarding", UIParent)
+  frame:SetSize(500, 320)
+  frame:SetPoint("CENTER")
+  frame:SetFrameStrata("DIALOG")
+  frame:Hide()
+
+  Analyzer:ApplyUISkin(frame, { alpha = 0.95 })
+
+  frame.step = 1
+  frame.maxSteps = 4
+
+  -- Title
+  frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+  frame.title:SetPoint("TOP", 0, -20)
+  frame.title:SetText("AnalyzerDPS")
+  frame.title:SetTextColor(1.00, 0.85, 0.10)
+
+  -- Content text
+  frame.content = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  frame.content:SetPoint("TOP", frame.title, "BOTTOM", 0, -30)
+  frame.content:SetPoint("LEFT", frame, "LEFT", 40, 0)
+  frame.content:SetPoint("RIGHT", frame, "RIGHT", -40, 0)
+  frame.content:SetJustifyH("CENTER")
+  frame.content:SetJustifyV("TOP")
+  frame.content:SetWordWrap(true)
+
+  -- Class/Spec display
+  frame.classInfo = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  frame.classInfo:SetPoint("TOP", frame.content, "BOTTOM", 0, -20)
+  frame.classInfo:SetTextColor(1.00, 0.82, 0.00)
+
+  -- Checkbox
+  frame.checkbox = CreateFrame("CheckButton", nil, frame, "ChatConfigCheckButtonTemplate")
+  frame.checkbox:SetPoint("TOP", frame.classInfo, "BOTTOM", 0, -30)
+  frame.checkbox:SetChecked(true)
+  frame.checkbox.label = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  frame.checkbox.label:SetPoint("LEFT", frame.checkbox, "RIGHT", 5, 0)
+  frame.checkbox.label:SetText("")
+
+  -- Buttons
+  frame.nextButton = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
+  frame.nextButton:SetSize(120, 25)
+  frame.nextButton:SetPoint("BOTTOMRIGHT", -20, 20)
+  frame.nextButton:SetText(Analyzer:L("NEXT"))
+  frame.nextButton:SetScript("OnClick", function()
+    Analyzer:OnboardingNext()
+  end)
+
+  frame.backButton = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
+  frame.backButton:SetSize(120, 25)
+  frame.backButton:SetPoint("RIGHT", frame.nextButton, "LEFT", -10, 0)
+  frame.backButton:SetText(Analyzer:L("BACK"))
+  frame.backButton:SetScript("OnClick", function()
+    Analyzer:OnboardingBack()
+  end)
+
+  frame.skipButton = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
+  frame.skipButton:SetSize(80, 20)
+  frame.skipButton:SetPoint("BOTTOMLEFT", 20, 20)
+  frame.skipButton:SetText(Analyzer:L("SKIP"))
+  frame.skipButton:SetScript("OnClick", function()
+    Analyzer:CompleteOnboarding()
+  end)
+
+  -- Step indicator
+  frame.stepText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  frame.stepText:SetPoint("BOTTOM", 0, 5)
+  frame.stepText:SetTextColor(0.7, 0.7, 0.7)
+
+  -- Language selection buttons
+  frame.englishButton = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
+  frame.englishButton:SetSize(150, 30)
+  frame.englishButton:SetPoint("CENTER", -80, -20)
+  frame.englishButton:SetText("English")
+  frame.englishButton:Hide()
+  frame.englishButton:SetScript("OnClick", function()
+    Analyzer:SetLanguage("enUS")
+    frame.englishButton:LockHighlight()
+    frame.polishButton:UnlockHighlight()
+  end)
+
+  frame.polishButton = CreateFrame("Button", nil, frame, "GameMenuButtonTemplate")
+  frame.polishButton:SetSize(150, 30)
+  frame.polishButton:SetPoint("CENTER", 80, -20)
+  frame.polishButton:SetText("Polski")
+  frame.polishButton:Hide()
+  frame.polishButton:SetScript("OnClick", function()
+    Analyzer:SetLanguage("plPL")
+    frame.polishButton:LockHighlight()
+    frame.englishButton:UnlockHighlight()
+  end)
+
+  Analyzer.ui.onboardingFrame = frame
+
+  return frame
+end
+
+function Analyzer:ShowOnboarding()
+  if not self.ui.onboardingFrame then
+    CreateOnboardingFrame()
+  end
+
+  self.ui.onboardingFrame.step = 1
+  self:UpdateOnboardingStep()
+  self.ui.onboardingFrame:Show()
+end
+
+function Analyzer:UpdateOnboardingStep()
+  local frame = self.ui.onboardingFrame
+  if not frame then
+    return
+  end
+
+  local step = frame.step
+  frame.stepText:SetText(string.format("%d / %d", step, frame.maxSteps))
+
+  frame.backButton:SetEnabled(step > 1)
+
+  -- Hide all optional elements first
+  frame.classInfo:Hide()
+  frame.checkbox:Hide()
+  frame.englishButton:Hide()
+  frame.polishButton:Hide()
+
+  if step == 1 then
+    -- Language selection
+    frame.content:SetText(Analyzer:L("ONBOARDING_LANGUAGE"))
+    frame.englishButton:Show()
+    frame.polishButton:Show()
+
+    -- Highlight current language
+    if self.settings.language == "plPL" then
+      frame.polishButton:LockHighlight()
+      frame.englishButton:UnlockHighlight()
+    else
+      frame.englishButton:LockHighlight()
+      frame.polishButton:UnlockHighlight()
+    end
+
+    frame.nextButton:SetText(Analyzer:L("NEXT"))
+
+  elseif step == 2 then
+    -- Welcome step
+    frame.content:SetText(Analyzer:L("ONBOARDING_WELCOME"))
+    frame.nextButton:SetText(Analyzer:L("NEXT"))
+
+  elseif step == 3 then
+    -- Class/Spec detection
+    local hasModule = self.activeModule ~= nil
+    local className = (self.player and self.player.class) or "Unknown"
+    local specName = self:GetSpecLabel(self.player)
+
+    if hasModule then
+      frame.content:SetText(Analyzer:L("ONBOARDING_SPEC_DETECTED"))
+      frame.classInfo:SetText(specName .. " " .. className)
+      frame.classInfo:SetTextColor(0.20, 0.90, 0.20)
+      frame.classInfo:Show()
+    else
+      frame.content:SetText(Analyzer:L("ONBOARDING_SPEC_NOT_SUPPORTED"))
+      frame.classInfo:SetText(specName .. " " .. className)
+      frame.classInfo:SetTextColor(1.00, 0.30, 0.30)
+      frame.classInfo:Show()
+    end
+
+    frame.nextButton:SetText(Analyzer:L("NEXT"))
+
+  elseif step == 4 then
+    -- Mini window option
+    frame.content:SetText(Analyzer:L("ONBOARDING_MINI_WINDOW"))
+    frame.checkbox:Show()
+    frame.checkbox.label:SetText(Analyzer:L("ENABLE_MINI_WINDOW"))
+    frame.nextButton:SetText(Analyzer:L("FINISH"))
+  end
+end
+
+function Analyzer:OnboardingNext()
+  local frame = self.ui.onboardingFrame
+  if not frame then
+    return
+  end
+
+  if frame.step == 4 then
+    -- Save mini window preference
+    if self.settings then
+      self.settings.miniWindow = self.settings.miniWindow or {}
+      self.settings.miniWindow.enabled = frame.checkbox:GetChecked() == true
+      self:UpdateMiniLiveWindow()
+    end
+    self:CompleteOnboarding()
+  else
+    frame.step = frame.step + 1
+    self:UpdateOnboardingStep()
+  end
+end
+
+function Analyzer:OnboardingBack()
+  local frame = self.ui.onboardingFrame
+  if not frame then
+    return
+  end
+
+  if frame.step > 1 then
+    frame.step = frame.step - 1
+    self:UpdateOnboardingStep()
+  end
+end
+
+function Analyzer:CompleteOnboarding()
+  if self.settings then
+    local key = self:GetPlayerHistoryKey()
+    if type(self.settings.onboardingCompleted) ~= "table" then
+      self.settings.onboardingCompleted = {}
+    end
+    self.settings.onboardingCompleted[key] = true
+  end
+
+  if self.ui.onboardingFrame then
+    self.ui.onboardingFrame:Hide()
+  end
+
+  print("|cFFE3BA04AnalyzerDPS:|r " .. Analyzer:L("ONBOARDING_COMPLETE"))
+end
+
+function Analyzer:CheckOnboarding()
+  if not self.settings then
+    return
+  end
+
+  local completed = false
+  if type(self.settings.onboardingCompleted) == "table" then
+    completed = self.settings.onboardingCompleted[self:GetPlayerHistoryKey()] == true
+  end
+
+  if not completed then
+    C_Timer.After(2, function()
+      Analyzer:ShowOnboarding()
+    end)
+  end
 end
 
 local frame = CreateFrame("Frame")
@@ -2366,14 +3531,24 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
     Analyzer:InitSettings()
     CreateReportFrame()
+    CreateMiniLiveWindow()
+    CreateMinimapIcon()
     Analyzer:InitLanguageDropdown()
     Analyzer:ApplyHintPosition()
+    Analyzer:ApplyMiniWindowPosition()
     Analyzer:QueueAnnounce()
+
+    -- Start mini window update ticker
+    C_Timer.NewTicker(0.3, function()
+      Analyzer:UpdateMiniLiveWindow()
+    end)
+
     return
   end
 
   if event == "PLAYER_ENTERING_WORLD" then
     Analyzer:QueueAnnounce()
+    Analyzer:CheckOnboarding()
     return
   end
 
@@ -2405,13 +3580,21 @@ frame:SetScript("OnEvent", function(_, event, ...)
       or subevent == "SPELL_AURA_REMOVED"
 
     if not Analyzer.fight then
+      if subevent == "SPELL_CAST_START"
+        and isPlayerSource
+        and spellId
+        and IsHostileFlags(destFlags) then
+        local spellName = GetSpellInfo(spellId)
+        local label = "Precast: " .. (spellName or "Unknown")
+        Analyzer:RecordPrecombatEvent(timestamp, label, spellId, "cast")
+      end
       if isAuraEvent
         and isPlayerDest
         and (auraType == "BUFF" or not auraType)
         and Analyzer:IsPrecombatBuffSpell(spellId) then
         local spellName = GetSpellInfo(spellId)
         local label = "Prepot: " .. (spellName or "Unknown")
-        Analyzer:RecordPrecombatEvent(timestamp, label, spellId)
+        Analyzer:RecordPrecombatEvent(timestamp, label, spellId, "potion")
       end
       if ShouldAutoStartFight(subevent, spellId, isPlayerSource, isPlayerDest, isAuraEvent, destFlags) then
         Analyzer:StartFight(timestamp)
@@ -2468,36 +3651,6 @@ frame:SetScript("OnEvent", function(_, event, ...)
   end
 end)
 
-Analyzer.locales["enUS"] = {
-  REPORT_SUMMARY = "Summary",
-  REPORT_LOG = "Event Log",
-  REPORT_HISTORY = "Fight History",
-  NO_REPORT = "No report available.",
-  NO_LOG = "No event log available.",
-  NO_HISTORY = "No fight history available.",
-  TIMELINE_LABEL = "Timeline",
-  TIMELINE_SCALE = "Prepull: %.1fs | Fight: %.1fs",
-  SCORE = "Score:",
-  KILL = "KILL",
-  ATTEMPT = "Attempt",
-  DUMMY = "Dummy",
-}
-
-Analyzer.locales["plPL"] = {
-  REPORT_SUMMARY = "Podsumowanie",
-  REPORT_LOG = "Log Walki",
-  REPORT_HISTORY = "Historia Walk",
-  NO_REPORT = "Brak raportu.",
-  NO_LOG = "Brak logu wydarzen.",
-  NO_HISTORY = "Brak historii walk.",
-  TIMELINE_LABEL = "Oś czasu",
-  TIMELINE_SCALE = "Prepull: %.1fs | Walka: %.1fs",
-  SCORE = "Ocena:",
-  KILL = "KILL",
-  ATTEMPT = "Proba",
-  DUMMY = "Dummy",
-}
-
 SLASH_ANALYZERDPS1 = "/adps"
 SlashCmdList["ANALYZERDPS"] = function(msg)
   msg = SafeLower(msg)
@@ -2518,14 +3671,24 @@ SlashCmdList["ANALYZERDPS"] = function(msg)
     print("  Ostatni raport: " .. (Analyzer.lastReport and "tak" or "nie"))
     return
   end
-  if AnalyzerDPSFrame:IsShown() then
-    AnalyzerDPSFrame:Hide()
-  else
-    if Analyzer.lastReport then
-      Analyzer:RenderReport(Analyzer.lastReport)
+  if msg == "resetonboarding" or msg == "reset" then
+    if Analyzer.settings then
+      if type(Analyzer.settings.onboardingCompleted) == "table" then
+        Analyzer.settings.onboardingCompleted[Analyzer:GetPlayerHistoryKey()] = nil
+      else
+        Analyzer.settings.onboardingCompleted = nil
+      end
+      print("|cFFE3BA04AnalyzerDPS:|r Onboarding został zresetowany. Przeładuj UI (/reload) aby zobaczyć go ponownie.")
+    end
+    return
+  end
+  if Analyzer.ui and Analyzer.ui.frame then
+    if Analyzer.ui.frame:IsShown() then
+      Analyzer.ui.frame:Hide()
     else
-      print("AnalyzerDPS: Brak raportu do wyswietlenia. Wejdz w walke i zakoncz ja, by zobaczyc analize.")
-      AnalyzerDPSFrame:Show()
+      Analyzer:OpenMainFrame()
     end
   end
 end
+
+

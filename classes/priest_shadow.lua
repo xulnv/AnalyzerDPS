@@ -364,7 +364,7 @@ function module.TrackDebuff(analyzer, subevent, spellId, destGUID, destName, tim
   end
 end
 
-function module.Analyze(_, fight, context)
+function module.Analyze(analyzer, fight, context)
   local metrics = {}
   local issues = {}
   local score = 100
@@ -524,6 +524,168 @@ function module.Analyze(_, fight, context)
     metrics = metrics,
     issues = issues,
   }
+end
+
+function module.GetLiveScore(analyzer, fight)
+  if not fight then
+    return nil
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  if duration < 5 then
+    return nil
+  end
+
+  local score = 100
+
+  -- Check for active DoTs
+  local hasSWP = false
+  local hasVT = false
+  local hasDP = false
+
+  for guid, debuff in pairs(fight.debuffs or {}) do
+    if debuff[SPELL_SHADOW_WORD_PAIN] and debuff[SPELL_SHADOW_WORD_PAIN].active then
+      hasSWP = true
+    end
+    if debuff[SPELL_VAMPIRIC_TOUCH] and debuff[SPELL_VAMPIRIC_TOUCH].active then
+      hasVT = true
+    end
+    if debuff[SPELL_DEVOURING_PLAGUE] and debuff[SPELL_DEVOURING_PLAGUE].active then
+      hasDP = true
+    end
+  end
+
+  if not hasSWP then
+    score = score - 15
+  end
+  if not hasVT then
+    score = score - 15
+  end
+  if not hasDP then
+    score = score - 10
+  end
+
+  if score < 0 then
+    score = 0
+  end
+
+  return score
+end
+
+local function CheckPlayerBuff(spellId)
+  if not spellId then return false end
+  for i = 1, 40 do
+    local name, _, _, _, _, _, _, _, _, auraSpellId = UnitBuff("player", i)
+    if not name then break end
+    if auraSpellId == spellId then
+      return true
+    end
+  end
+  return false
+end
+
+local function CheckTargetDebuff(spellId)
+  if not spellId or not UnitExists("target") then return false end
+  for i = 1, 40 do
+    local name, _, _, _, _, _, _, caster, _, _, auraSpellId = UnitDebuff("target", i)
+    if not name then break end
+    if auraSpellId == spellId and caster == "player" then
+      return true
+    end
+  end
+  return false
+end
+
+function module.GetLiveAdvice(analyzer, fight)
+  if not fight then
+    return ""
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  local hasSurgeOfDarkness = CheckPlayerBuff(SPELL_SURGE_OF_DARKNESS)
+  if hasSurgeOfDarkness then
+    return "Surge of Darkness! Mind Spike!"
+  end
+
+  if not CheckPlayerBuff(SPELL_SHADOWFORM) and duration > 2 then
+    return "Wejdz w Shadowform!"
+  end
+
+  if UnitExists("target") then
+    local hasSWP = CheckTargetDebuff(SPELL_SHADOW_WORD_PAIN)
+    if not hasSWP and duration > 2 then
+      return "Naloz Shadow Word: Pain!"
+    end
+
+    local hasVT = CheckTargetDebuff(SPELL_VAMPIRIC_TOUCH)
+    if not hasVT and duration > 3 then
+      return "Naloz Vampiric Touch!"
+    end
+
+    local hasDP = CheckTargetDebuff(SPELL_DEVOURING_PLAGUE)
+    if not hasDP and duration > 5 then
+      return "Odswiez Devouring Plague!"
+    end
+  end
+
+  if utils.IsSpellReady(SPELL_SHADOWFIEND) and duration > 15 then
+    return "Shadowfiend gotowy!"
+  end
+
+  if utils.IsSpellReady(SPELL_MIND_BLAST) then
+    return "Mind Blast gotowy!"
+  end
+
+  return ""
+end
+
+function module.GetAdviceSpellIcon(analyzer, fight)
+  if not fight then
+    return nil
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  local hasSurgeOfDarkness = CheckPlayerBuff(SPELL_SURGE_OF_DARKNESS)
+  if hasSurgeOfDarkness then
+    return SPELL_MIND_SPIKE
+  end
+
+  if not CheckPlayerBuff(SPELL_SHADOWFORM) and duration > 2 then
+    return SPELL_SHADOWFORM
+  end
+
+  if UnitExists("target") then
+    local hasSWP = CheckTargetDebuff(SPELL_SHADOW_WORD_PAIN)
+    if not hasSWP and duration > 2 then
+      return SPELL_SHADOW_WORD_PAIN
+    end
+
+    local hasVT = CheckTargetDebuff(SPELL_VAMPIRIC_TOUCH)
+    if not hasVT and duration > 3 then
+      return SPELL_VAMPIRIC_TOUCH
+    end
+
+    local hasDP = CheckTargetDebuff(SPELL_DEVOURING_PLAGUE)
+    if not hasDP and duration > 5 then
+      return SPELL_DEVOURING_PLAGUE
+    end
+  end
+
+  if utils.IsSpellReady(SPELL_SHADOWFIEND) and duration > 15 then
+    return SPELL_SHADOWFIEND
+  end
+
+  if utils.IsSpellReady(SPELL_MIND_BLAST) then
+    return SPELL_MIND_BLAST
+  end
+
+  return nil
 end
 
 Analyzer:RegisterClassModule(module.class, module)

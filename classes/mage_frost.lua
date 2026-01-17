@@ -23,6 +23,7 @@ local SPELL_FINGERS_OF_FROST = 44544
 local SPELL_BRAIN_FREEZE = 44549
 local SPELL_BRAIN_FREEZE_ALT = 57761
 local SPELL_WATER_ELEMENTAL = 31687
+local SPELL_INVOCERS_ENERGY = 116257
 local SPELL_POTION_JADE_SERPENT = 105702
 local SPELL_LIVING_BOMB = 44457
 local SPELL_NETHER_TEMPEST = 114923
@@ -41,6 +42,7 @@ local TRACKED_BUFFS = {
   [SPELL_BRAIN_FREEZE_ALT] = true,
   [SPELL_ICY_VEINS] = true,
   [SPELL_ICY_VEINS_ALT] = true,
+  [SPELL_INVOCERS_ENERGY] = true,
   [SPELL_POTION_JADE_SERPENT] = true,
   [SPELL_ALTER_TIME] = true,
 }
@@ -174,11 +176,17 @@ function module.InitFight(_, fight)
     lastAlterCast = 0,
   }
   fight.bombSpellId = nil
+  fight.flags = fight.flags or {}
+  fight.flags.invokersEnergySeen = false
+  fight.flags.waterElementalActive = false
 end
 
 function module.OnFightStart(analyzer, startTime)
   if utils.PlayerHasAuraBySpellId(SPELL_ICY_VEINS) or utils.PlayerHasAuraBySpellId(SPELL_ICY_VEINS_ALT) then
     module.RegisterIcyVeinsUse(analyzer, startTime)
+  end
+  if UnitExists and UnitExists("pet") then
+    analyzer.fight.flags.waterElementalActive = true
   end
 end
 
@@ -296,6 +304,11 @@ function module.TrackSpellCast(analyzer, spellId, timestamp)
     module.HandleAlterTimeUse(analyzer, now)
   end
 
+  if spellId == SPELL_WATER_ELEMENTAL then
+    fight.flags.waterElementalActive = true
+    analyzer:AddEventLog(now, "Water Elemental", SPELL_WATER_ELEMENTAL)
+  end
+
   if spellId == SPELL_ICE_LANCE then
     local buff = fight.buffs[SPELL_FINGERS_OF_FROST]
     if buff and buff.stacks and buff.stacks > 0 then
@@ -380,6 +393,9 @@ function module.TrackAura(analyzer, subevent, spellId, amount, timestamp)
         fight.cooldowns.potionLast = now
         analyzer:AddEventLog(now, "Potion of the Jade Serpent", SPELL_POTION_JADE_SERPENT)
       end
+    end
+    if spellId == SPELL_INVOCERS_ENERGY then
+      fight.flags.invokersEnergySeen = true
     end
     if spellId == SPELL_FINGERS_OF_FROST and gainedFof then
       analyzer:AddEventLog(now, string.format("Fingers of Frost x%d", stacks), SPELL_FINGERS_OF_FROST)
@@ -491,10 +507,10 @@ function module.MaybeShowAlterTimeHint(analyzer, timestamp)
 end
 
 function module.ShouldTrackSummonSpell(spellId)
-  return spellId == SPELL_FROZEN_ORB
+  return spellId == SPELL_FROZEN_ORB or spellId == SPELL_WATER_ELEMENTAL
 end
 
-function module.Analyze(_, fight, context)
+function module.Analyze(analyzer, fight, context)
   local metrics = {}
   local issues = {}
   local score = 100
@@ -650,6 +666,24 @@ function module.Analyze(_, fight, context)
     score = utils.Clamp(score - 6, 0, 100)
   end
 
+  local invokersUptime = utils.SafePercent(fight.buffUptime[SPELL_INVOCERS_ENERGY] or 0, context.duration) or 0
+  local invokersStatus = utils.StatusForPercent(invokersUptime, 0.85, 0.70)
+  AddMetric(
+    "Invoker's Energy uptime",
+    SPELL_INVOCERS_ENERGY,
+    utils.FormatPercent(invokersUptime),
+    invokersUptime,
+    invokersStatus,
+    invokersStatus == "bad" and "Za niski uptime Invoker's Energy (Evocation). Odnawiaj buff przed wygasnieciem."
+      or (invokersStatus == "warn" and "Uptime Invoker's Energy moglby byc lepszy. Pilnuj odswiezenia." or nil),
+    invokersStatus == "bad" and 10 or (invokersStatus == "warn" and 5 or 0)
+  )
+
+  if context.duration >= 20 and not fight.flags.waterElementalActive then
+    utils.AddIssue(issues, "Brak Water Elemental. Upewnij sie, ze pet jest aktywny przez cala walke.")
+    score = utils.Clamp(score - 6, 0, 100)
+  end
+
   if fight.bombSpellId then
     local bombUptime = utils.SafePercent(fight.debuffUptime[fight.bombSpellId] or 0, context.duration)
     local bombStatus = utils.StatusForPercent(bombUptime, 0.85, 0.70)
@@ -676,6 +710,24 @@ function module.Analyze(_, fight, context)
     utils.AddIssue(issues, string.format("Fingers of Frost wygaslo z %d ladunkami. Wydawaj proci szybciej i unikaj capowania 2 stackow.", fight.procs.fofExpired))
   end
 
+  local totalCasts = frostbolt + iceLance + ffb + frozenOrb
+  local avgCastTime = 1.8
+  local expectedCasts = math.floor(context.duration / avgCastTime)
+  if expectedCasts > 0 then
+    local castEfficiency = utils.SafePercent(totalCasts, expectedCasts)
+    local castStatus = utils.StatusForPercent(castEfficiency, 0.85, 0.70)
+    AddMetric(
+      "Efektywnosc castowania",
+      nil,
+      string.format("%d/%d castow (%.0f%%)", totalCasts, expectedCasts, (castEfficiency or 0) * 100),
+      math.min(castEfficiency or 0, 1),
+      castStatus,
+      castStatus == "bad" and "Za malo castow. Minimalizuj przerwy w DPS - unikaj zbednego ruchu i downtime."
+        or (castStatus == "warn" and "Srednia ilosc castow. Staraj sie castowac bez przerw." or nil),
+      castStatus == "bad" and 15 or (castStatus == "warn" and 8 or 0)
+    )
+  end
+
   return {
     score = score,
     metrics = metrics,
@@ -683,4 +735,201 @@ function module.Analyze(_, fight, context)
   }
 end
 
+function module.GetLiveScore(analyzer, fight)
+  if not fight then
+    return nil
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  if duration < 5 then
+    return nil
+  end
+
+  local score = 100
+
+  local hasInvoker = utils.PlayerHasAuraBySpellId(SPELL_INVOCERS_ENERGY)
+  if not hasInvoker and duration > 10 then
+    score = score - 15
+  end
+
+  if UnitExists and not UnitExists("pet") then
+    score = score - 10
+  end
+
+  if fight.bombSpellId and not fight.debuffs[fight.bombSpellId] and duration > 4 then
+    score = score - 10
+  end
+
+  if fight.procs then
+    if fight.procs.fofExpired and fight.procs.fofExpired > 0 then
+      score = score - math.min(12, fight.procs.fofExpired * 3)
+    end
+    if fight.procs.bfExpired and fight.procs.bfExpired > 0 then
+      score = score - math.min(12, fight.procs.bfExpired * 4)
+    end
+  end
+
+  if score < 0 then
+    score = 0
+  end
+
+  return score
+end
+
+local function CheckPlayerBuff(spellId)
+  if not spellId then return false, 0 end
+  for i = 1, 40 do
+    local name, _, count, _, _, _, _, _, _, auraSpellId = UnitBuff("player", i)
+    if not name then break end
+    if auraSpellId == spellId then
+      return true, count or 1
+    end
+  end
+  return false, 0
+end
+
+local function CheckTargetDebuff(spellId)
+  if not spellId or not UnitExists("target") then return false, 0 end
+  for i = 1, 40 do
+    local name, _, _, _, _, expirationTime, _, caster, _, _, auraSpellId = UnitDebuff("target", i)
+    if not name then break end
+    if auraSpellId == spellId and caster == "player" then
+      local remaining = expirationTime and (expirationTime - GetTime()) or 0
+      return true, remaining
+    end
+  end
+  return false, 0
+end
+
+function module.GetLiveAdvice(analyzer, fight)
+  if not fight then
+    return ""
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  local hasInvoker = CheckPlayerBuff(SPELL_INVOCERS_ENERGY)
+  if not hasInvoker and duration > 10 then
+    return "Brak Invoker's Energy - odswiez Evocation."
+  end
+
+  if UnitExists and not UnitExists("pet") and duration > 8 then
+    return "Summon Water Elemental!"
+  end
+
+  local hasBrainFreeze, _ = CheckPlayerBuff(SPELL_BRAIN_FREEZE)
+  if not hasBrainFreeze then
+    hasBrainFreeze, _ = CheckPlayerBuff(SPELL_BRAIN_FREEZE_ALT)
+  end
+  if hasBrainFreeze then
+    return "BF! Frostfire Bolt!"
+  end
+
+  local hasFoF, fofStacks = CheckPlayerBuff(SPELL_FINGERS_OF_FROST)
+  if hasFoF then
+    if fofStacks >= 2 then
+      return "FoF x2! Ice Lance!"
+    else
+      return "FoF! Ice Lance!"
+    end
+  end
+
+  if utils.IsSpellReady(SPELL_ICY_VEINS) and duration > 10 then
+    return "Icy Veins gotowe - uzyj na cooldown!"
+  end
+
+  if utils.IsSpellReady(SPELL_FROZEN_ORB) and duration > 8 then
+    return "Frozen Orb gotowy - wrzuc na cooldown!"
+  end
+
+  local bombSpellId = fight.bombSpellId or SPELL_LIVING_BOMB
+  if bombSpellId and duration > 3 then
+    local hasAnyBomb = fight.debuffs[bombSpellId] ~= nil or fight.debuffs[SPELL_NETHER_TEMPEST] ~= nil
+    
+    if not hasAnyBomb then
+      return "Naloz bombe na jakiegos moba!"
+    end
+    
+    if UnitExists("target") then
+      local hasBomb, bombRemaining = CheckTargetDebuff(bombSpellId)
+      local hasNT, ntRemaining = CheckTargetDebuff(SPELL_NETHER_TEMPEST)
+      
+      if hasBomb and bombRemaining > 0 and bombRemaining < 4 then
+        return "Living Bomb wygasa na celu!"
+      elseif hasNT and ntRemaining > 0 and ntRemaining < 4 then
+        return "Nether Tempest wygasa na celu!"
+      end
+    end
+  end
+
+  return ""
+end
+
+function module.GetAdviceSpellIcon(analyzer, fight)
+  if not fight then
+    return nil
+  end
+
+  local now = GetTime()
+  local duration = now - fight.startTime
+
+  local hasInvoker = CheckPlayerBuff(SPELL_INVOCERS_ENERGY)
+  if not hasInvoker and duration > 10 then
+    return SPELL_EVOCATION
+  end
+
+  if UnitExists and not UnitExists("pet") and duration > 8 then
+    return SPELL_WATER_ELEMENTAL
+  end
+
+  local hasBrainFreeze, _ = CheckPlayerBuff(SPELL_BRAIN_FREEZE)
+  if not hasBrainFreeze then
+    hasBrainFreeze, _ = CheckPlayerBuff(SPELL_BRAIN_FREEZE_ALT)
+  end
+  if hasBrainFreeze then
+    return SPELL_FROSTFIRE_BOLT
+  end
+
+  local hasFoF, fofStacks = CheckPlayerBuff(SPELL_FINGERS_OF_FROST)
+  if hasFoF then
+    return SPELL_ICE_LANCE
+  end
+
+  if utils.IsSpellReady(SPELL_ICY_VEINS) and duration > 10 then
+    return SPELL_ICY_VEINS
+  end
+
+  if utils.IsSpellReady(SPELL_FROZEN_ORB) and duration > 8 then
+    return SPELL_FROZEN_ORB
+  end
+
+  local bombSpellId = fight.bombSpellId or SPELL_LIVING_BOMB
+  if bombSpellId and duration > 3 then
+    local hasAnyBomb = fight.debuffs[bombSpellId] ~= nil or fight.debuffs[SPELL_NETHER_TEMPEST] ~= nil
+    
+    if not hasAnyBomb then
+      return bombSpellId
+    end
+    
+    if UnitExists("target") then
+      local hasBomb, bombRemaining = CheckTargetDebuff(bombSpellId)
+      local hasNT, ntRemaining = CheckTargetDebuff(SPELL_NETHER_TEMPEST)
+      
+      if hasBomb and bombRemaining > 0 and bombRemaining < 4 then
+        return bombSpellId
+      elseif hasNT and ntRemaining > 0 and ntRemaining < 4 then
+        return SPELL_NETHER_TEMPEST
+      end
+    end
+  end
+
+  return nil
+end
+
 Analyzer:RegisterClassModule("MAGE", module)
+
+
+
