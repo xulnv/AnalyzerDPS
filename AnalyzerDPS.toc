@@ -6,6 +6,8 @@
 ## SavedVariables: AnalyzerDPSDB
 
 AnalyzerDPS.lua
+lang/enUS.lua
+lang/plPL.lua
 classes/deathknight_blood.lua
 classes/deathknight_frost.lua
 classes/deathknight_unholy.lua

@@ -265,6 +265,11 @@ function module.HandleAlterTimeUse(analyzer, now)
   local hasDoubleFof = fofCharges >= 2
   local icyActive = icy ~= nil
   local goodTiming = icyActive and (hasKeyProcs or hasDoubleFof)
+  local hintTime = fight.hints.lastAlterHint or 0
+  local usedAfterHint = hintTime > 0 and (now - hintTime) <= 4
+  if usedAfterHint then
+    goodTiming = true
+  end
   fight.counts.alterTimeTotal = (fight.counts.alterTimeTotal or 0) + 1
   analyzer:AddTimelineEvent(SPELL_ALTER_TIME, now, "cooldown")
   if goodTiming then

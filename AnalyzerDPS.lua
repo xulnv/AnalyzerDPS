@@ -45,126 +45,16 @@ local DEFAULT_SETTINGS = {
   language = "enUS",
 }
 
-local L = {}
-local LOCALES = {
-  enUS = {
-    ADDON_NAME = "xAnalyzerDPS",
-    LOADED = "xAnalyzerDPS v%s loaded. Detected: %s - %s.",
-    NO_REPORT = "No report to display. Enter combat and finish it to see analysis.",
-    FIGHT_TOO_SHORT = "Fight too short for meaningful analysis. Need at least 15s.",
-    NO_MODULE = "No rules for this class/spec. We're adding them in the next step.",
+Analyzer.locales = Analyzer.locales or {}
 
-    CLASS = "Class",
-    SPEC = "Spec",
-    RACE = "Race",
-    MODE = "Mode",
-    SINGLE_TARGET = "Single target",
-    MULTI_TARGET = "Multi target",
-    TIME = "Time",
-    TARGETS = "Targets",
-    BOSS = "Boss",
-    DUMMY = "Dummy",
-    YES = "yes",
-    NO = "no",
-
-    SCORE = "Score",
-    DPS = "DPS",
-    FIGHT_DURATION = "Fight duration",
-    METRICS = "Metrics",
-    ISSUES_SUGGESTIONS = "Issues and suggestions",
-    NO_CRITICAL_ISSUES = "No critical issues. Further improvements are optimizations.",
-    FIGHT_LOG = "Fight log",
-    NO_LOG = "No usage log. Enter combat and check again.",
-    BOSS_HISTORY = "Boss history",
-    NO_HISTORY = "No boss history.",
-
-    REPORT = "Report",
-    SETTINGS = "Settings",
-    SOUND_TITLE = "Proc and ability sounds",
-    SOUND_NOTE = "Path to .ogg file (e.g. Sound\\\\Interface\\\\RaidWarning.ogg)",
-    ENABLE_SOUND = "Enable sound",
-    TEST = "Test",
-    NO_SOUND_SETTINGS = "No sound settings for this class/spec.",
-
-    HINT_POSITION = "Ability hint position",
-    POSITION_X = "Position X",
-    POSITION_Y = "Position Y",
-    UNLOCK_HINT = "Unlock hint dragging",
-    PREVIEW_HINT = "Preview hint",
-    RESET_POSITION = "Reset position",
-
-    TIMELINE_LABEL = "Timeline: cooldowns (white), procs (blue), prepull (yellow)",
-    TIMELINE_SCALE = "Time scale: -%ds (prepull) | 0.0s | %.1fs",
-    FOOTER = "Addon created to deepen REGRESS, greetings to the crazy ones with luck | fuck pis",
-
-    KILL = "Kill",
-    ATTEMPT = "Attempt",
-
-    LANGUAGE = "Language",
-    LANGUAGE_CHANGED = "Language changed to: %s. Reload UI (/reload) to apply changes.",
-  },
-  plPL = {
-    ADDON_NAME = "xAnalyzerDPS",
-    LOADED = "xAnalyzerDPS v%s zaladowany. Wykryto: %s - %s.",
-    NO_REPORT = "Brak raportu do wyswietlenia. Wejdz w walke i zakoncz ja, by zobaczyc analize.",
-    FIGHT_TOO_SHORT = "Walka zbyt krotka na sensowna analize. Potrzebujesz co najmniej 15s.",
-    NO_MODULE = "Brak reguly dla tej klasy/speca. Dodajemy je w kolejnym kroku.",
-
-    CLASS = "Klasa",
-    SPEC = "Spec",
-    RACE = "Rasa",
-    MODE = "Tryb",
-    SINGLE_TARGET = "Single target",
-    MULTI_TARGET = "Multi target",
-    TIME = "Czas",
-    TARGETS = "Cele",
-    BOSS = "Boss",
-    DUMMY = "Dummy",
-    YES = "tak",
-    NO = "nie",
-
-    SCORE = "Ocena",
-    DPS = "DPS",
-    FIGHT_DURATION = "Czas walki",
-    METRICS = "Metryki",
-    ISSUES_SUGGESTIONS = "Problemy i sugestie",
-    NO_CRITICAL_ISSUES = "Brak krytycznych problemow. Dalsze poprawki to optymalizacje.",
-    FIGHT_LOG = "Log walki",
-    NO_LOG = "Brak logu z uzyc. Wejdz w walke i sprawdz ponownie.",
-    BOSS_HISTORY = "Historia bossow",
-    NO_HISTORY = "Brak historii bossow.",
-
-    REPORT = "Raport",
-    SETTINGS = "Ustawienia",
-    SOUND_TITLE = "Dzwieki prockow i umiejetnosci",
-    SOUND_NOTE = "Sciezka pliku .ogg (np. Sound\\\\Interface\\\\RaidWarning.ogg)",
-    ENABLE_SOUND = "Wlacz dzwiek",
-    TEST = "Test",
-    NO_SOUND_SETTINGS = "Brak ustawien dzwiekow dla tej klasy/speca.",
-
-    HINT_POSITION = "Pozycja informatora umiejetnosci",
-    POSITION_X = "Pozycja X",
-    POSITION_Y = "Pozycja Y",
-    UNLOCK_HINT = "Odblokuj przesuwanie informatora",
-    PREVIEW_HINT = "Podglad informatora",
-    RESET_POSITION = "Reset pozycji",
-
-    TIMELINE_LABEL = "Timeline: cooldowny (biale), proci (niebieskie), prepull (zolte)",
-    TIMELINE_SCALE = "Skala czasu: -%ds (prepull) | 0.0s | %.1fs",
-    FOOTER = "Wtyczka stworzona dla poglebienia REGRESSu pozdro dla wariatow z fartem | jebac pis",
-
-    KILL = "Kill",
-    ATTEMPT = "Proba",
-
-    LANGUAGE = "Jezyk",
-    LANGUAGE_CHANGED = "Jezyk zmieniony na: %s. Przeladuj UI (/reload) aby zastosowac zmiany.",
-  },
-}
+local ApplyTabButtonSkin
+local SetTabSelected
 
 function Analyzer:GetLocale()
   local settings = self.settings or DEFAULT_SETTINGS
   local lang = settings.language or "enUS"
-  return LOCALES[lang] or LOCALES["enUS"]
+  local locales = self.locales or {}
+  return locales[lang] or locales["enUS"] or {}
 end
 
 function Analyzer:L(key)
@@ -969,6 +859,29 @@ function Analyzer:RefreshSettingsUI()
   frame.isRefreshing = false
 end
 
+function Analyzer:SwitchReportTab(tabIndex)
+  local ui = self.ui
+  if not ui or not ui.frame then
+    return
+  end
+  local frame = ui.frame
+  frame.reportActiveTab = tabIndex
+
+  for i, tab in ipairs(frame.reportTabs or {}) do
+    SetTabSelected(tab, i == tabIndex)
+  end
+
+  if frame.reportOverviewContent then
+    frame.reportOverviewContent:SetShown(tabIndex == 1)
+  end
+  if frame.reportLogContent then
+    frame.reportLogContent:SetShown(tabIndex == 2)
+  end
+  if frame.reportHistoryContent then
+    frame.reportHistoryContent:SetShown(tabIndex == 3)
+  end
+end
+
 function Analyzer:SwitchTab(tabIndex)
   local ui = self.ui
   if not ui or not ui.frame then
@@ -979,11 +892,7 @@ function Analyzer:SwitchTab(tabIndex)
   frame.activeTab = tabIndex
 
   for i, tab in ipairs(frame.tabs) do
-    if i == tabIndex then
-      tab:Disable()
-    else
-      tab:Enable()
-    end
+    SetTabSelected(tab, i == tabIndex)
   end
 
   if frame.reportContent then
@@ -1000,6 +909,7 @@ function Analyzer:SwitchTab(tabIndex)
     if frame.reportContent then
       frame.reportContent:Show()
     end
+    self:SwitchReportTab(frame.reportActiveTab or 1)
     if frame.hintPreviewCheck then
       frame.hintPreviewCheck:SetChecked(false)
     end
@@ -1350,13 +1260,16 @@ function Analyzer:RenderTimeline(report)
 
   if ui.timelineScale then
     ui.timelineScale:SetText(
-      string.format("Skala czasu: -%ds (prepull) | 0.0s | %.1fs", prepullWindow, duration)
+      string.format(self:L("TIMELINE_SCALE"), prepullWindow, duration)
     )
   end
 end
 
 function Analyzer:StoreFightHistory(report, fight)
-  if not report or not fight or not report.context or not report.context.isBoss then
+  if not report or not fight or not report.context then
+    return
+  end
+  if not report.context.isBoss and not report.context.isDummy then
     return
   end
   AnalyzerDPSDB = AnalyzerDPSDB or {}
@@ -1369,6 +1282,8 @@ function Analyzer:StoreFightHistory(report, fight)
     score = report.score or 0,
     dps = report.dps,
     kill = fight.kill == true,
+    isBoss = report.context.isBoss == true,
+    isDummy = report.context.isDummy == true,
   }
   table.insert(history, 1, entry)
   while #history > 10 do
@@ -1383,7 +1298,7 @@ function Analyzer:RenderHistory()
   end
   local history = AnalyzerDPSDB and AnalyzerDPSDB.fightHistory or {}
   if #history == 0 then
-    ui.historyText:SetText("Brak historii bossow.")
+    ui.historyText:SetText(self:L("NO_HISTORY"))
     ui.historyContent:SetHeight(ui.historyText:GetStringHeight() + 6)
     return
   end
@@ -1391,9 +1306,9 @@ function Analyzer:RenderHistory()
   for i, entry in ipairs(history) do
     local name = entry.name or "Boss"
     local duration = entry.duration or 0
-    local status = entry.kill and "Kill" or "Proba"
+    local status = entry.isDummy and self:L("DUMMY") or (entry.kill and self:L("KILL") or self:L("ATTEMPT"))
     local dpsText = entry.dps and entry.dps > 0 and string.format("DPS %.0f", entry.dps) or "DPS n/a"
-    local scoreText = string.format("Ocena %d", entry.score or 0)
+    local scoreText = string.format("%s %d", self:L("SCORE"), entry.score or 0)
     table.insert(
       lines,
       string.format("%d) %s | %s | %.1fs | %s | %s | %s", i, entry.time or "--", name, duration, status, dpsText, scoreText)
@@ -1530,6 +1445,115 @@ local function ApplyUIButtonSkin(button)
   pushed:SetTexture(UI_CLOSE_ICON)
   pushed:SetVertexColor(1.00, 1.00, 1.00, 0.8)
   button:SetPushedTexture(pushed)
+end
+
+ApplyTabButtonSkin = function(button)
+  if not button then
+    return
+  end
+
+  button:SetNormalFontObject("GameFontHighlightSmall")
+  button:SetHighlightFontObject("GameFontHighlightSmall")
+  button:SetDisabledFontObject("GameFontDisableSmall")
+  if button.Left then
+    button.Left:Hide()
+  end
+  if button.Middle then
+    button.Middle:Hide()
+  end
+  if button.Right then
+    button.Right:Hide()
+  end
+  if button.LeftDisabled then
+    button.LeftDisabled:Hide()
+  end
+  if button.MiddleDisabled then
+    button.MiddleDisabled:Hide()
+  end
+  if button.RightDisabled then
+    button.RightDisabled:Hide()
+  end
+
+  local skin = button.tabSkin or {}
+  button.tabSkin = skin
+
+  if not skin.normal then
+    skin.normal = button:CreateTexture(nil, "BACKGROUND")
+    skin.normal:SetAllPoints()
+    skin.normal:SetTexture("Interface\\Buttons\\WHITE8X8")
+    button:SetNormalTexture(skin.normal)
+  end
+  skin.normal:SetVertexColor(0.18, 0.18, 0.18, 0.85)
+
+  if not skin.highlight then
+    skin.highlight = button:CreateTexture(nil, "HIGHLIGHT")
+    skin.highlight:SetAllPoints()
+    skin.highlight:SetTexture("Interface\\Buttons\\WHITE8X8")
+    skin.highlight:SetVertexColor(0.28, 0.28, 0.28, 0.9)
+    button:SetHighlightTexture(skin.highlight)
+  end
+
+  if not skin.pushed then
+    skin.pushed = button:CreateTexture(nil, "ARTWORK")
+    skin.pushed:SetAllPoints()
+    skin.pushed:SetTexture("Interface\\Buttons\\WHITE8X8")
+    skin.pushed:SetVertexColor(0.12, 0.12, 0.12, 0.95)
+    button:SetPushedTexture(skin.pushed)
+  end
+
+  if not skin.border then
+    skin.border = {}
+
+    skin.border.top = button:CreateTexture(nil, "BORDER")
+    skin.border.top:SetHeight(1)
+    skin.border.top:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
+    skin.border.top:SetPoint("TOPRIGHT", button, "TOPRIGHT", 0, 0)
+    skin.border.top:SetTexture("Interface\\Buttons\\WHITE8X8")
+    skin.border.top:SetVertexColor(0, 0, 0, 0.35)
+
+    skin.border.bottom = button:CreateTexture(nil, "BORDER")
+    skin.border.bottom:SetHeight(1)
+    skin.border.bottom:SetPoint("BOTTOMLEFT", button, "BOTTOMLEFT", 0, 0)
+    skin.border.bottom:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", 0, 0)
+    skin.border.bottom:SetTexture("Interface\\Buttons\\WHITE8X8")
+    skin.border.bottom:SetVertexColor(0, 0, 0, 0.35)
+
+    skin.border.left = button:CreateTexture(nil, "BORDER")
+    skin.border.left:SetWidth(1)
+    skin.border.left:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
+    skin.border.left:SetPoint("BOTTOMLEFT", button, "BOTTOMLEFT", 0, 0)
+    skin.border.left:SetTexture("Interface\\Buttons\\WHITE8X8")
+    skin.border.left:SetVertexColor(0, 0, 0, 0.35)
+
+    skin.border.right = button:CreateTexture(nil, "BORDER")
+    skin.border.right:SetWidth(1)
+    skin.border.right:SetPoint("TOPRIGHT", button, "TOPRIGHT", 0, 0)
+    skin.border.right:SetPoint("BOTTOMRIGHT", button, "BOTTOMRIGHT", 0, 0)
+    skin.border.right:SetTexture("Interface\\Buttons\\WHITE8X8")
+    skin.border.right:SetVertexColor(0, 0, 0, 0.35)
+  end
+end
+
+SetTabSelected = function(button, selected)
+  if not button then
+    return
+  end
+  local skin = button.tabSkin
+  if skin and skin.normal then
+    if selected then
+      skin.normal:SetVertexColor(0.10, 0.10, 0.10, 0.95)
+    else
+      skin.normal:SetVertexColor(0.18, 0.18, 0.18, 0.85)
+    end
+  end
+  local text = button:GetFontString()
+  if text then
+    if selected then
+      text:SetTextColor(1.00, 0.82, 0.20)
+    else
+      text:SetTextColor(0.85, 0.85, 0.85)
+    end
+  end
 end
 
 function Analyzer:ApplyUISkin(frame, options)
@@ -1717,6 +1741,7 @@ local function CreateReportFrame()
     tab:SetPoint("TOPLEFT", 16 + (index - 1) * 105, -30)
     tab:SetText(text)
     tab:SetScript("OnClick", onClick)
+    ApplyTabButtonSkin(tab)
     return tab
   end
 
@@ -1738,31 +1763,68 @@ local function CreateReportFrame()
   reportContent:Show()
   frame.reportContent = reportContent
 
-  frame.summary = reportContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  frame.summary:SetPoint("TOPLEFT", 16, -60)
+  local function CreateReportTab(parent, index, text, onClick)
+    local tab = CreateFrame("Button", nil, parent, "GameMenuButtonTemplate")
+    tab:SetSize(120, 20)
+    tab:SetPoint("TOPLEFT", 16 + (index - 1) * 125, -60)
+    tab:SetText(text)
+    tab:SetScript("OnClick", onClick)
+    ApplyTabButtonSkin(tab)
+    return tab
+  end
+
+  frame.reportTabs = {}
+  frame.reportTabs[1] = CreateReportTab(reportContent, 1, Analyzer:L("REPORT_SUMMARY"), function()
+    Analyzer:SwitchReportTab(1)
+  end)
+  frame.reportTabs[2] = CreateReportTab(reportContent, 2, Analyzer:L("REPORT_LOG"), function()
+    Analyzer:SwitchReportTab(2)
+  end)
+  frame.reportTabs[3] = CreateReportTab(reportContent, 3, Analyzer:L("REPORT_HISTORY"), function()
+    Analyzer:SwitchReportTab(3)
+  end)
+  frame.reportActiveTab = 1
+
+  local reportOverviewContent = CreateFrame("Frame", nil, reportContent)
+  reportOverviewContent:SetAllPoints()
+  reportOverviewContent:Show()
+  frame.reportOverviewContent = reportOverviewContent
+
+  local reportLogContent = CreateFrame("Frame", nil, reportContent)
+  reportLogContent:SetAllPoints()
+  reportLogContent:Hide()
+  frame.reportLogContent = reportLogContent
+
+  local reportHistoryContent = CreateFrame("Frame", nil, reportContent)
+  reportHistoryContent:SetAllPoints()
+  reportHistoryContent:Hide()
+  frame.reportHistoryContent = reportHistoryContent
+
+  frame.summary = reportOverviewContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  frame.summary:SetPoint("TOPLEFT", 16, -96)
   frame.summary:SetWidth(720)
   frame.summary:SetJustifyH("LEFT")
 
-  frame.subsummary = reportContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  frame.subsummary = reportOverviewContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   frame.subsummary:SetPoint("TOPLEFT", frame.summary, "BOTTOMLEFT", 0, -4)
   frame.subsummary:SetWidth(720)
   frame.subsummary:SetJustifyH("LEFT")
 
-  frame.score = reportContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  frame.score = reportOverviewContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   frame.score:SetPoint("TOPLEFT", frame.subsummary, "BOTTOMLEFT", 0, -8)
   frame.score:SetText("Ocena: 0 / 100")
 
-  frame.dps = reportContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  frame.dps = reportOverviewContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   frame.dps:SetPoint("TOPLEFT", frame.score, "BOTTOMLEFT", 0, -4)
   frame.dps:SetText("DPS: n/a")
 
-  frame.duration = reportContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  frame.duration = reportOverviewContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   frame.duration:SetPoint("TOPLEFT", frame.dps, "BOTTOMLEFT", 0, -2)
   frame.duration:SetText("Czas walki: 0.0s")
 
-  local metricsFrame = CreateFrame("Frame", nil, reportContent)
+  local metricsFrame = CreateFrame("Frame", nil, reportOverviewContent)
   metricsFrame:SetSize(350, 220)
-  metricsFrame:SetPoint("TOPLEFT", 16, -166)
+  metricsFrame:SetPoint("TOPLEFT", 16, -202)
 
   metricsFrame.title = metricsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   metricsFrame.title:SetPoint("TOPLEFT", 0, 0)
@@ -1773,9 +1835,9 @@ local function CreateReportFrame()
     metricsFrame.rows[i] = CreateMetricRow(metricsFrame, i)
   end
 
-  local issuesFrame = CreateFrame("Frame", nil, reportContent)
+  local issuesFrame = CreateFrame("Frame", nil, reportOverviewContent)
   issuesFrame:SetSize(350, 220)
-  issuesFrame:SetPoint("TOPRIGHT", -16, -166)
+  issuesFrame:SetPoint("TOPRIGHT", -16, -202)
 
   issuesFrame.title = issuesFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   issuesFrame.title:SetPoint("TOPLEFT", 0, 0)
@@ -1794,15 +1856,15 @@ local function CreateReportFrame()
   issuesText:SetWidth(issuesFrame:GetWidth() - 28)
   issuesText:SetJustifyH("LEFT")
   issuesText:SetJustifyV("TOP")
-  issuesText:SetText("Brak raportu. Wejdz w walke i zakoncz ja, by zobaczyc analize.")
+  issuesText:SetText(Analyzer:L("NO_REPORT"))
 
-  local logFrame = CreateFrame("Frame", nil, reportContent)
-  logFrame:SetSize(480, 150)
-  logFrame:SetPoint("TOPLEFT", metricsFrame, "BOTTOMLEFT", 0, -16)
+  local logFrame = CreateFrame("Frame", nil, reportLogContent)
+  logFrame:SetSize(720, 440)
+  logFrame:SetPoint("TOPLEFT", 16, -96)
 
   logFrame.title = logFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   logFrame.title:SetPoint("TOPLEFT", 0, 0)
-  logFrame.title:SetText("Log walki")
+  logFrame.title:SetText(Analyzer:L("REPORT_LOG"))
 
   local logScroll = CreateFrame("ScrollFrame", "AnalyzerDPSLogScroll", logFrame, "UIPanelScrollFrameTemplate")
   logScroll:SetPoint("TOPLEFT", 0, -18)
@@ -1817,15 +1879,15 @@ local function CreateReportFrame()
   logText:SetWidth(logFrame:GetWidth() - 28)
   logText:SetJustifyH("LEFT")
   logText:SetJustifyV("TOP")
-  logText:SetText("Brak logu. Wejdz w walke i zakoncz ja, by zobaczyc szczegoly.")
+  logText:SetText(Analyzer:L("NO_LOG"))
 
-  local historyFrame = CreateFrame("Frame", nil, reportContent)
-  historyFrame:SetSize(220, 150)
-  historyFrame:SetPoint("TOPLEFT", logFrame, "TOPRIGHT", 16, 0)
+  local historyFrame = CreateFrame("Frame", nil, reportHistoryContent)
+  historyFrame:SetSize(720, 440)
+  historyFrame:SetPoint("TOPLEFT", 16, -96)
 
   historyFrame.title = historyFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   historyFrame.title:SetPoint("TOPLEFT", 0, 0)
-  historyFrame.title:SetText("Historia bossow")
+  historyFrame.title:SetText(Analyzer:L("REPORT_HISTORY"))
 
   local historyScroll = CreateFrame("ScrollFrame", "AnalyzerDPSHistoryScroll", historyFrame, "UIPanelScrollFrameTemplate")
   historyScroll:SetPoint("TOPLEFT", 0, -18)
@@ -1840,13 +1902,13 @@ local function CreateReportFrame()
   historyText:SetWidth(historyFrame:GetWidth() - 28)
   historyText:SetJustifyH("LEFT")
   historyText:SetJustifyV("TOP")
-  historyText:SetText("Brak historii bossow.")
+  historyText:SetText(Analyzer:L("NO_HISTORY"))
 
-  local timelineLabel = reportContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  local timelineLabel = reportOverviewContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   timelineLabel:SetPoint("BOTTOMLEFT", 16, 78)
-  timelineLabel:SetText("Timeline: cooldowny (biale), proci (niebieskie), prepull (zolte)")
+  timelineLabel:SetText(Analyzer:L("TIMELINE_LABEL"))
 
-  local timeline = CreateFrame("Frame", nil, reportContent)
+  local timeline = CreateFrame("Frame", nil, reportOverviewContent)
   timeline:SetPoint("BOTTOMLEFT", 16, 22)
   timeline:SetPoint("BOTTOMRIGHT", -16, 22)
   timeline:SetHeight(46)
@@ -1872,16 +1934,16 @@ local function CreateReportFrame()
     timeline.marks[i] = mark
   end
 
-  local timelineScaleLine = reportContent:CreateTexture(nil, "ARTWORK")
+  local timelineScaleLine = reportOverviewContent:CreateTexture(nil, "ARTWORK")
   timelineScaleLine:SetPoint("BOTTOMLEFT", 16, 16)
   timelineScaleLine:SetPoint("BOTTOMRIGHT", -16, 16)
   timelineScaleLine:SetHeight(1)
   timelineScaleLine:SetTexture("Interface\\Buttons\\WHITE8X8")
   timelineScaleLine:SetVertexColor(0.30, 0.30, 0.30, 0.8)
 
-  local timelineScale = reportContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  local timelineScale = reportOverviewContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   timelineScale:SetPoint("BOTTOM", 0, 10)
-  timelineScale:SetText("Skala czasu: -0s (prepull) | 0.0s | 0.0s")
+  timelineScale:SetText(string.format(Analyzer:L("TIMELINE_SCALE"), 0, 0))
 
   Analyzer.ui.frame = frame
   Analyzer.ui.summary = frame.summary
@@ -2144,7 +2206,12 @@ local function CreateReportFrame()
   Analyzer.ui.hintFrame = hint
   Analyzer:UpdateHintIcon()
 
-  frame.tabs[1]:Disable()
+  for i, tab in ipairs(frame.tabs) do
+    SetTabSelected(tab, i == 1)
+  end
+  for i, tab in ipairs(frame.reportTabs) do
+    SetTabSelected(tab, i == 1)
+  end
 
   return frame
 end
