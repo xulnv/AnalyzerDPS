@@ -140,6 +140,37 @@ function module.IsTrackedDebuffSpell(spellId)
   return TRACKED_DEBUFFS[spellId] == true
 end
 
+function module.IsTrackedCast(spellId)
+  return TRACKED_CASTS[spellId] == true
+end
+
+function module.ShouldRecordCast(event)
+  if not event or not event.spellId then
+    return false
+  end
+  return TRACKED_CASTS[event.spellId] == true
+end
+
+function module.GetProcInfo(spellId)
+  if spellId == SPELL_DEEP_INSIGHT then
+    return {
+      soundKey = SOUND_KEY_DEEP_INSIGHT,
+      priority = 3,
+    }
+  elseif spellId == SPELL_ADRENALINE_RUSH then
+    return {
+      soundKey = SOUND_KEY_ADRENALINE_RUSH,
+      priority = 2,
+    }
+  elseif spellId == SPELL_KILLING_SPREE then
+    return {
+      soundKey = SOUND_KEY_KILLING_SPREE,
+      priority = 2,
+    }
+  end
+  return nil
+end
+
 function module.InitFight(_, fight)
   fight.counts = {
     eviscerateTotal = 0,

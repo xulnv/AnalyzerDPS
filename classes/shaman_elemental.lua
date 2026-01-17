@@ -131,6 +131,37 @@ function module.IsTrackedDebuffSpell(spellId)
   return TRACKED_DEBUFFS[spellId] == true
 end
 
+function module.IsTrackedCast(spellId)
+  return TRACKED_CASTS[spellId] == true
+end
+
+function module.ShouldRecordCast(event)
+  if not event or not event.spellId then
+    return false
+  end
+  return TRACKED_CASTS[event.spellId] == true
+end
+
+function module.GetProcInfo(spellId)
+  if spellId == SPELL_LAVA_SURGE then
+    return {
+      soundKey = SOUND_KEY_LAVA_SURGE,
+      priority = 2,
+    }
+  elseif spellId == SPELL_ASCENDANCE then
+    return {
+      soundKey = SOUND_KEY_ASCENDANCE,
+      priority = 3,
+    }
+  elseif spellId == SPELL_ELEMENTAL_MASTERY then
+    return {
+      soundKey = SOUND_KEY_ELEMENTAL_MASTERY,
+      priority = 2,
+    }
+  end
+  return nil
+end
+
 function module.ShouldTrackSummonSpell(spellId)
   return spellId == SPELL_FIRE_ELEMENTAL_TOTEM
 end
@@ -206,10 +237,10 @@ function module.TrackAura(analyzer, subevent, spellId, amount, timestamp)
     end
 
     local history = EnsureHistory(fight.buffHistory, spellId)
+    if isRefresh and buff.historyEntry and not buff.historyEntry.removed then
+      buff.historyEntry.removed = now
+    end
     if not buff.historyEntry or isRefresh then
-      if buff.historyEntry and not buff.historyEntry.removed then
-        buff.historyEntry.removed = now
-      end
       buff.historyEntry = { applied = now }
       table.insert(history, buff.historyEntry)
     end

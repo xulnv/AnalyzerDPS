@@ -1530,9 +1530,9 @@ ApplyTabButtonSkin = function(button)
     return
   end
 
-  button:SetNormalFontObject("GameFontHighlightSmall")
-  button:SetHighlightFontObject("GameFontHighlightSmall")
-  button:SetDisabledFontObject("GameFontDisableSmall")
+  button:SetNormalFontObject("GameFontNormal")
+  button:SetHighlightFontObject("GameFontNormal")
+  button:SetDisabledFontObject("GameFontDisable")
   if button.Left then
     button.Left:Hide()
   end
@@ -1567,7 +1567,7 @@ ApplyTabButtonSkin = function(button)
     skin.highlight = button:CreateTexture(nil, "HIGHLIGHT")
     skin.highlight:SetAllPoints()
     skin.highlight:SetTexture("Interface\\Buttons\\WHITE8X8")
-    skin.highlight:SetVertexColor(0.28, 0.28, 0.28, 0.9)
+    skin.highlight:SetVertexColor(0.35, 0.35, 0.35, 0.95)
     button:SetHighlightTexture(skin.highlight)
   end
 
@@ -1619,17 +1619,17 @@ SetTabSelected = function(button, selected)
   local skin = button.tabSkin
   if skin and skin.normal then
     if selected then
-      skin.normal:SetVertexColor(0.10, 0.10, 0.10, 0.95)
+      skin.normal:SetVertexColor(0.12, 0.12, 0.12, 0.98)
     else
-      skin.normal:SetVertexColor(0.18, 0.18, 0.18, 0.85)
+      skin.normal:SetVertexColor(0.20, 0.20, 0.20, 0.80)
     end
   end
   local text = button:GetFontString()
   if text then
     if selected then
-      text:SetTextColor(1.00, 0.82, 0.20)
+      text:SetTextColor(1.00, 0.85, 0.10)
     else
-      text:SetTextColor(0.85, 0.85, 0.85)
+      text:SetTextColor(0.75, 0.75, 0.75)
     end
   end
 end
@@ -1904,9 +1904,10 @@ local function CreateReportFrame()
   metricsFrame:SetSize(350, 220)
   metricsFrame:SetPoint("TOPLEFT", 16, -202)
 
-  metricsFrame.title = metricsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  metricsFrame.title = metricsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   metricsFrame.title:SetPoint("TOPLEFT", 0, 0)
   metricsFrame.title:SetText("Metryki")
+  metricsFrame.title:SetTextColor(1.00, 0.85, 0.10)
 
   metricsFrame.rows = {}
   for i = 1, 9 do
@@ -1917,9 +1918,10 @@ local function CreateReportFrame()
   issuesFrame:SetSize(350, 220)
   issuesFrame:SetPoint("TOPRIGHT", -16, -202)
 
-  issuesFrame.title = issuesFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  issuesFrame.title = issuesFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   issuesFrame.title:SetPoint("TOPLEFT", 0, 0)
   issuesFrame.title:SetText("Problemy i sugestie")
+  issuesFrame.title:SetTextColor(1.00, 0.85, 0.10)
 
   local scrollFrame = CreateFrame("ScrollFrame", "AnalyzerDPSIssuesScroll", issuesFrame, "UIPanelScrollFrameTemplate")
   scrollFrame:SetPoint("TOPLEFT", 0, -18)
@@ -1940,9 +1942,10 @@ local function CreateReportFrame()
   logFrame:SetSize(720, 440)
   logFrame:SetPoint("TOPLEFT", 16, -96)
 
-  logFrame.title = logFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  logFrame.title = logFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   logFrame.title:SetPoint("TOPLEFT", 0, 0)
   logFrame.title:SetText(Analyzer:L("REPORT_LOG"))
+  logFrame.title:SetTextColor(1.00, 0.85, 0.10)
 
   local logScroll = CreateFrame("ScrollFrame", "AnalyzerDPSLogScroll", logFrame, "UIPanelScrollFrameTemplate")
   logScroll:SetPoint("TOPLEFT", 0, -18)
@@ -1963,9 +1966,10 @@ local function CreateReportFrame()
   historyFrame:SetSize(720, 440)
   historyFrame:SetPoint("TOPLEFT", 16, -96)
 
-  historyFrame.title = historyFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  historyFrame.title = historyFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   historyFrame.title:SetPoint("TOPLEFT", 0, 0)
   historyFrame.title:SetText(Analyzer:L("REPORT_HISTORY"))
+  historyFrame.title:SetTextColor(1.00, 0.85, 0.10)
 
   local historyScroll = CreateFrame("ScrollFrame", "AnalyzerDPSHistoryScroll", historyFrame, "UIPanelScrollFrameTemplate")
   historyScroll:SetPoint("TOPLEFT", 0, -18)
@@ -2463,6 +2467,36 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
   end
 end)
+
+Analyzer.locales["enUS"] = {
+  REPORT_SUMMARY = "Summary",
+  REPORT_LOG = "Event Log",
+  REPORT_HISTORY = "Fight History",
+  NO_REPORT = "No report available.",
+  NO_LOG = "No event log available.",
+  NO_HISTORY = "No fight history available.",
+  TIMELINE_LABEL = "Timeline",
+  TIMELINE_SCALE = "Prepull: %.1fs | Fight: %.1fs",
+  SCORE = "Score:",
+  KILL = "KILL",
+  ATTEMPT = "Attempt",
+  DUMMY = "Dummy",
+}
+
+Analyzer.locales["plPL"] = {
+  REPORT_SUMMARY = "Podsumowanie",
+  REPORT_LOG = "Log Walki",
+  REPORT_HISTORY = "Historia Walk",
+  NO_REPORT = "Brak raportu.",
+  NO_LOG = "Brak logu wydarzen.",
+  NO_HISTORY = "Brak historii walk.",
+  TIMELINE_LABEL = "Oś czasu",
+  TIMELINE_SCALE = "Prepull: %.1fs | Walka: %.1fs",
+  SCORE = "Ocena:",
+  KILL = "KILL",
+  ATTEMPT = "Proba",
+  DUMMY = "Dummy",
+}
 
 SLASH_ANALYZERDPS1 = "/adps"
 SlashCmdList["ANALYZERDPS"] = function(msg)
