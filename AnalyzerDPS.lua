@@ -855,6 +855,7 @@ function Analyzer:RefreshSettingsUI()
     local currentLang = settings.language == "plPL" and "Polski" or "English"
     UIDropDownMenu_SetText(frame.languageDropdown, currentLang)
   end
+  self:UpdateLanguageFlag(settings.language)
 
   frame.isRefreshing = false
 end
@@ -958,6 +959,7 @@ function Analyzer:InitLanguageDropdown()
 
   local currentLang = self.settings.language == "plPL" and "Polski" or "English"
   UIDropDownMenu_SetText(frame.languageDropdown, currentLang)
+  self:UpdateLanguageFlag(self.settings.language)
 end
 
 function Analyzer:SetLanguage(lang)
@@ -971,6 +973,31 @@ function Analyzer:SetLanguage(lang)
   if self.ui and self.ui.frame and self.ui.frame.languageDropdown then
     UIDropDownMenu_SetText(self.ui.frame.languageDropdown, langName)
   end
+  self:UpdateLanguageFlag(lang)
+end
+
+local function SetFlagTextures(flag, key, shown)
+  local textures = flag and flag[key]
+  if not textures then
+    return
+  end
+  for _, texture in ipairs(textures) do
+    texture:SetShown(shown)
+  end
+  if key == "us" and flag.usCanton then
+    flag.usCanton:SetShown(shown)
+  end
+end
+
+function Analyzer:UpdateLanguageFlag(lang)
+  local frame = self.ui and self.ui.frame
+  if not frame or not frame.languageFlag then
+    return
+  end
+  local flag = frame.languageFlag
+  local isPolish = lang == "plPL"
+  SetFlagTextures(flag, "pl", isPolish)
+  SetFlagTextures(flag, "us", not isPolish)
 end
 
 function Analyzer:StartFight(startTimestamp)
@@ -1980,6 +2007,57 @@ local function CreateReportFrame()
 
   frame.languageDropdown = CreateFrame("Button", "AnalyzerDPSLanguageDropdown", settingsContent, "UIDropDownMenuTemplate")
   frame.languageDropdown:SetPoint("TOPLEFT", languageTitle, "BOTTOMLEFT", -16, -4)
+
+  local function CreateLanguageFlag(parent, anchor)
+    local flag = CreateFrame("Frame", nil, parent)
+    flag:SetSize(20, 12)
+    flag:SetPoint("LEFT", anchor, "RIGHT", -6, 2)
+
+    flag.border = flag:CreateTexture(nil, "BORDER")
+    flag.border:SetAllPoints()
+    flag.border:SetTexture("Interface\\Buttons\\WHITE8X8")
+    flag.border:SetVertexColor(0, 0, 0, 0.6)
+
+    flag.pl = {}
+    flag.pl[1] = flag:CreateTexture(nil, "ARTWORK")
+    flag.pl[1]:SetPoint("TOPLEFT", 1, -1)
+    flag.pl[1]:SetPoint("TOPRIGHT", -1, -1)
+    flag.pl[1]:SetHeight(5)
+    flag.pl[1]:SetTexture("Interface\\Buttons\\WHITE8X8")
+    flag.pl[1]:SetVertexColor(1, 1, 1, 1)
+
+    flag.pl[2] = flag:CreateTexture(nil, "ARTWORK")
+    flag.pl[2]:SetPoint("BOTTOMLEFT", 1, 1)
+    flag.pl[2]:SetPoint("BOTTOMRIGHT", -1, 1)
+    flag.pl[2]:SetHeight(5)
+    flag.pl[2]:SetTexture("Interface\\Buttons\\WHITE8X8")
+    flag.pl[2]:SetVertexColor(0.85, 0.1, 0.1, 1)
+
+    flag.us = {}
+    for i = 1, 6 do
+      local stripe = flag:CreateTexture(nil, "ARTWORK")
+      stripe:SetPoint("TOPLEFT", 1, -(i - 1) * 2 - 1)
+      stripe:SetPoint("TOPRIGHT", -1, -(i - 1) * 2 - 1)
+      stripe:SetHeight(2)
+      stripe:SetTexture("Interface\\Buttons\\WHITE8X8")
+      if i % 2 == 1 then
+        stripe:SetVertexColor(0.75, 0.1, 0.1, 1)
+      else
+        stripe:SetVertexColor(1, 1, 1, 1)
+      end
+      flag.us[i] = stripe
+    end
+
+    flag.usCanton = flag:CreateTexture(nil, "ARTWORK")
+    flag.usCanton:SetPoint("TOPLEFT", 1, -1)
+    flag.usCanton:SetSize(8, 6)
+    flag.usCanton:SetTexture("Interface\\Buttons\\WHITE8X8")
+    flag.usCanton:SetVertexColor(0.05, 0.2, 0.6, 1)
+
+    return flag
+  end
+
+  frame.languageFlag = CreateLanguageFlag(settingsContent, frame.languageDropdown)
 
   local soundTitle = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   soundTitle:SetPoint("TOPLEFT", 16, -120)
