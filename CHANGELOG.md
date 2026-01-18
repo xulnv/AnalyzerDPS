@@ -1,5 +1,24 @@
 # AnalyzerDPS - Changelog
 
+## Version 0.88 (2026-01-18)
+
+### Fixed
+- **Shadow Priest - Mind Blast Tracking**: Fixed Mind Blast not being counted properly
+  - Added support for all Mind Blast ranks (Rank 1-9)
+  - All ranks now normalized to base spell ID for accurate tracking
+  - Mind Blast casts now appear in event log
+- **Shadow Priest - Shadowform Detection**: Improved Shadowform buff tracking
+  - Added event log entry when Shadowform is activated
+  - Better uptime calculation for Shadowform metric
+
+### Technical
+- Added Mind Blast rank spell IDs: 8205, 8206, 10945, 10946, 10947, 25372, 25375, 48126, 48127
+- All Mind Blast ranks tracked in TRACKED_CASTS
+- Spell ID normalization in TrackSpellCast for consistent counting
+- Enhanced event logging for Shadow Priest abilities
+
+---
+
 ## Version 0.87 (2026-01-18)
 
 ### Fixed
