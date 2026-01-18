@@ -1,0 +1,15 @@
+# AI/editor
+.claude/
+
+# Data/output
+AnalyzerDPSDB*.lua
+SavedVariables/
+WTF/
+Logs/
+*.log
+*.bak
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db

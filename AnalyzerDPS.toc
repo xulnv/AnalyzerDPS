@@ -1,0 +1,46 @@
+## Interface: 50503
+## Title: xAnalyzerDPS
+## Notes: Fight analyzer for MoP Classic
+## Author: xCzarownik2137
+## Version: 0.87
+## SavedVariables: AnalyzerDPSDB
+
+AnalyzerDPS.lua
+SoundLibrary.lua
+PrepotionData.lua
+lang/enUS.lua
+lang/plPL.lua
+classes/deathknight_blood.lua
+classes/deathknight_frost.lua
+classes/deathknight_unholy.lua
+classes/druid_balance.lua
+classes/druid_feral.lua
+classes/druid_guardian.lua
+classes/druid_restoration.lua
+classes/hunter_beastmastery.lua
+classes/hunter_marksmanship.lua
+classes/hunter_survival.lua
+classes/mage_arcane.lua
+classes/mage_fire.lua
+classes/mage_frost.lua
+classes/monk_brewmaster.lua
+classes/monk_mistweaver.lua
+classes/monk_windwalker.lua
+classes/paladin_holy.lua
+classes/paladin_protection.lua
+classes/paladin_retribution.lua
+classes/priest_discipline.lua
+classes/priest_holy.lua
+classes/priest_shadow.lua
+classes/rogue_assassination.lua
+classes/rogue_combat.lua
+classes/rogue_subtlety.lua
+classes/shaman_elemental.lua
+classes/shaman_enhancement.lua
+classes/shaman_restoration.lua
+classes/warlock_affliction.lua
+classes/warlock_demonology.lua
+classes/warlock_destruction.lua
+classes/warrior_arms.lua
+classes/warrior_fury.lua
+classes/warrior_protection.lua

@@ -1,0 +1,18 @@
+package-as: AnalyzerDPS
+
+enable-nolib-creation: no
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+ignore:
+  - .git
+  - .github
+  - .gitignore
+  - README.md
+  - ARCHITECTURE.md
+  - STATUS.md
+  - BOSS_ADVICE.md
+  - rotations_todo.md
+  - ROTATIONS_TODO.md
