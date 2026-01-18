@@ -1,7 +1,7 @@
 local ADDON_NAME, Analyzer = ...
 
 Analyzer = Analyzer or {}
-Analyzer.VERSION = "0.88"
+Analyzer.VERSION = "0.89"
 Analyzer.fight = nil
 Analyzer.lastReport = nil
 Analyzer.player = {}
@@ -1307,6 +1307,20 @@ function Analyzer:EndFight(autoStopped)
   if not self.fight then
     return
   end
+  
+  -- Delay dla Rogue Vanish i podobnych ability (dropują combat ale walka trwa)
+  if not autoStopped and not self.pendingFightEnd then
+    self.pendingFightEnd = true
+    C_Timer.After(2.5, function()
+      self.pendingFightEnd = false
+      -- Jeśli nadal nie ma combat i nie rozpoczęto nowej walki, zakończ
+      if not UnitAffectingCombat("player") and self.fight then
+        self:EndFight(false)
+      end
+    end)
+    return
+  end
+  
   local fight = self.fight
   local startTime = fight.startTime or GetTime()
   local endTime = GetTime()
@@ -1323,6 +1337,7 @@ function Analyzer:EndFight(autoStopped)
   local wasRealFight = fight.hasRealDamage or fight.damage >= 500
   
   self.fight = nil
+  self.pendingFightEnd = false
   
   -- Zapisz czas zakończenia walki (zapobiega auto-startowi od DoT-ów)
   self.lastFightEndTime = GetTime()
@@ -3807,6 +3822,10 @@ frame:SetScript("OnEvent", function(_, event, ...)
   end
 
   if event == "PLAYER_REGEN_DISABLED" then
+    -- Anuluj pending end fight jeśli gracz wrócił do combat (np. po Vanish)
+    if Analyzer.pendingFightEnd then
+      Analyzer.pendingFightEnd = false
+    end
     Analyzer:StartFight()
     return
   end

@@ -2,7 +2,7 @@
 ## Title: xAnalyzerDPS
 ## Notes: Fight analyzer for MoP Classic
 ## Author: xCzarownik2137
-## Version: 0.88
+## Version: 0.89
 ## SavedVariables: AnalyzerDPSDB
 
 AnalyzerDPS.lua

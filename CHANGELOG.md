@@ -1,5 +1,21 @@
 # AnalyzerDPS - Changelog
 
+## Version 0.89 (2026-01-18)
+
+### Fixed
+- **Rogue - Vanish Combat Drop**: Fixed issue where Vanish would end combat log prematurely
+  - Added 2.5 second delay before ending fight when leaving combat
+  - If player re-enters combat during delay (e.g., after Vanish), fight continues normally
+  - Prevents combat log from ending when using Vanish as opener or mid-fight
+  - Works for all abilities that drop combat (Feign Death, Shadowmeld, etc.)
+
+### Technical
+- Added `pendingFightEnd` flag to track delayed fight end
+- `PLAYER_REGEN_DISABLED` now cancels pending fight end
+- `EndFight()` checks if player is still in combat after delay before finalizing
+
+---
+
 ## Version 0.88 (2026-01-18)
 
 ### Fixed
