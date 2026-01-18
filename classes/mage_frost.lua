@@ -213,8 +213,12 @@ end
 
 function module.FinalizeFight(_, fight, endTime)
   for spellId, buff in pairs(fight.buffs) do
+    -- FoF wygasa tylko jeśli nie było BF (priorytet: BF > FoF)
     if spellId == SPELL_FINGERS_OF_FROST and buff.stacks and buff.stacks > 0 then
-      fight.procs.fofExpired = fight.procs.fofExpired + buff.stacks
+      local hasBF = fight.buffs[SPELL_BRAIN_FREEZE] and not fight.buffs[SPELL_BRAIN_FREEZE].consumed
+      if not hasBF then
+        fight.procs.fofExpired = fight.procs.fofExpired + buff.stacks
+      end
     end
     if spellId == SPELL_BRAIN_FREEZE and not buff.consumed then
       fight.procs.bfExpired = fight.procs.bfExpired + 1
@@ -349,9 +353,15 @@ function module.TrackSpellCast(analyzer, spellId, timestamp)
   if spellId == SPELL_ICE_LANCE then
     local buff = fight.buffs[SPELL_FINGERS_OF_FROST]
     if buff and buff.stacks and buff.stacks > 0 then
-      fight.counts.iceLanceWithFof = fight.counts.iceLanceWithFof + 1
-      fight.procs.fofChargesUsed = fight.procs.fofChargesUsed + 1
-      buff.stacks = math.max(buff.stacks - 1, 0)
+      -- Podczas Icy Veins, Ice Lance ma 3 instancje DMG (multistrike)
+      -- Tylko pierwsza konsumuje proc - ignoruj kolejne w krótkim czasie
+      local lastIceLance = fight.cooldowns.iceLanceLast or 0
+      if (now - lastIceLance) > 0.1 then
+        fight.counts.iceLanceWithFof = fight.counts.iceLanceWithFof + 1
+        fight.procs.fofChargesUsed = fight.procs.fofChargesUsed + 1
+        buff.stacks = math.max(buff.stacks - 1, 0)
+        fight.cooldowns.iceLanceLast = now
+      end
     end
   end
 
